@@ -5,15 +5,14 @@
 #define NAPI_VERSION 5
 #endif
 
-#define SC_LAMP "lamp"
-#define SC_COMMAND "command"
-#define SC_HUE "hue"
-#define SC_SATURATION "saturation"
-#define SC_VALUE "value"
+#define LC_SC_LAMP "lamp"
+#define LC_SC_COMMAND "command"
+#define LC_SC_HUE "hue"
+#define LC_SC_SATURATION "saturation"
+#define LC_SC_VALUE "value"
 
 #include <napi.h>
 #include <string>
-
 #include "livingcolors.h"
 
 extern Napi::ThreadSafeFunction tsf_log;
@@ -23,11 +22,11 @@ Napi::Number changeState(const Napi::CallbackInfo &);
 Napi::Number setup(const Napi::CallbackInfo &);
 Napi::Number stop(const Napi::CallbackInfo &);
 
-lc::StateChange createStateChange(const Napi::Object);
-Napi::Object create_js_StateChange(const Napi::Env, const lc::StateChange &);
+lc::StateChange createStateChange(Napi::Object &);
+Napi::Object create_js_StateChange(Napi::Env &, lc::StateChange &);
 
-unsigned char NapiValue_uint8(const Napi::Value);
-uint32_t NapiValue_uint32(const Napi::Value);
+unsigned char NapiValue_uint8(Napi::Value &);
+uint32_t NapiValue_uint32(Napi::Value &);
 
 void js_cb_log(Napi::Env, Napi::Function, std::string *);
 void js_cb_changeState(Napi::Env, Napi::Function, lc::StateChange *);

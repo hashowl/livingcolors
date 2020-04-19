@@ -1,8 +1,5 @@
 #include "index.h"
 
-Napi::ThreadSafeFunction tsf_log;
-Napi::ThreadSafeFunction tsf_changeState;
-
 Napi::Number changeState(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
@@ -22,12 +19,12 @@ Napi::Number setup(const Napi::CallbackInfo &info)
     if (info.Length() < 2)
     {
         lc::js_log("LivingColors.setup() failed: wrong number of arguments");
-        return Napi::Number::New(env, 1);
+        return Napi::Number::New(env, -1);
     }
     if (!info[0].IsFunction() || !info[1].IsFunction())
     {
         lc::js_log("LivingColors.setup() failed: argument of wrong type");
-        return Napi::Number::New(env, 1);
+        return Napi::Number::New(env, -1);
     }
     tsf_log = Napi::ThreadSafeFunction::New(
         env,
@@ -59,34 +56,34 @@ Napi::Number stop(const Napi::CallbackInfo &info)
     return Napi::Number::New(env, 0);
 }
 
-lc::StateChange createStateChange(const Napi::Object js_sc)
+lc::StateChange createStateChange(Napi::Object &js_sc)
 {
     lc::StateChange sc;
-    sc.lamp = NapiValue_uint32(js_sc.Get(SC_LAMP));
-    sc.command = NapiValue_uint8(js_sc.Get(SC_COMMAND));
-    sc.hue = NapiValue_uint8(js_sc.Get(SC_HUE));
-    sc.saturation = NapiValue_uint8(js_sc.Get(SC_SATURATION));
-    sc.value = NapiValue_uint8(js_sc.Get(SC_VALUE));
+    sc.lamp = NapiValue_uint32(js_sc.Get(LC_SC_LAMP));
+    sc.command = NapiValue_uint8(js_sc.Get(LC_SC_COMMAND));
+    sc.hue = NapiValue_uint8(js_sc.Get(LC_SC_HUE));
+    sc.saturation = NapiValue_uint8(js_sc.Get(LC_SC_SATURATION));
+    sc.value = NapiValue_uint8(js_sc.Get(LC_SC_VALUE));
     return sc;
 }
 
-Napi::Object create_js_StateChange(const Napi::Env env, const lc::StateChange &sc)
+Napi::Object create_js_StateChange(Napi::Env &env, lc::StateChange &sc)
 {
     Napi::Object js_sc = Napi::Object::New(env);
-    js_sc.Set(SC_LAMP, Napi::Number::New(env, sc.lamp));
-    js_sc.Set(SC_COMMAND, Napi::Number::New(env, sc.command));
-    js_sc.Set(SC_HUE, Napi::Number::New(env, sc.hue));
-    js_sc.Set(SC_SATURATION, Napi::Number::New(env, sc.saturation));
-    js_sc.Set(SC_VALUE, Napi::Number::New(env, sc.value));
+    js_sc.Set(LC_SC_LAMP, Napi::Number::New(env, sc.lamp));
+    js_sc.Set(LC_SC_COMMAND, Napi::Number::New(env, sc.command));
+    js_sc.Set(LC_SC_HUE, Napi::Number::New(env, sc.hue));
+    js_sc.Set(LC_SC_SATURATION, Napi::Number::New(env, sc.saturation));
+    js_sc.Set(LC_SC_VALUE, Napi::Number::New(env, sc.value));
     return js_sc;
 }
 
-unsigned char NapiValue_uint8(const Napi::Value value)
+unsigned char NapiValue_uint8(Napi::Value &value)
 {
     return (unsigned char)NapiValue_uint32(value);
 }
 
-uint32_t NapiValue_uint32(const Napi::Value value)
+uint32_t NapiValue_uint32(Napi::Value &value)
 {
     return value.As<Napi::Number>().Uint32Value();
 }

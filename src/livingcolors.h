@@ -1,20 +1,20 @@
 #ifndef LIVINGCOLORS_H
 #define LIVINGCOLORS_H
 
-#define PACKET_LENGTH 14
-#define ADDR_LENGHT 4
+#define LC_PACKET_LENGTH 14
+#define LC_ADDR_LENGHT 4
 
-#define PKT_IDX_LENGTH 0
-#define PKT_IDX_DST_ADDR 1
-#define PKT_IDX_SRC_ADDR 5
-#define PKT_IDX_PTCL_INFO 9
-#define PKT_IDX_COMMAND 10
-#define PKT_IDX_SEQUENCE 11
-#define PKT_IDX_HUE 12
-#define PKT_IDX_SATURATION 13
-#define PKT_IDX_VALUE 14
+#define LC_OFFSET_LENGTH 0
+#define LC_OFFSET_DST_ADDR 1
+#define LC_OFFSET_SRC_ADDR 5
+#define LC_OFFSET_PTCL_INFO 9
+#define LC_OFFSET_COMMAND 10
+#define LC_OFFSET_SEQUENCE 11
+#define LC_OFFSET_HUE 12
+#define LC_OFFSET_SATURATION 13
+#define LC_OFFSET_VALUE 14
 
-#define PTCL_INFO 17
+#define LC_PTCL_INFO 17
 
 namespace lc
 {
@@ -31,10 +31,13 @@ public:
 
 int setup();
 
+void RX_loop();
+void TX_loop();
+
 int enqueueStateChange(StateChange &);
 
 StateChange createStateChange(unsigned char *, uint32_t);
-unsigned char *createPacket(const StateChange &);
+unsigned char *createPacket(StateChange &);
 
 void js_log(const char *);
 void js_changeState(StateChange &);
