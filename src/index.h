@@ -18,9 +18,9 @@
 extern Napi::ThreadSafeFunction tsf_log;
 extern Napi::ThreadSafeFunction tsf_changeState;
 
-Napi::Number changeState(const Napi::CallbackInfo &);
-Napi::Number setup(const Napi::CallbackInfo &);
-Napi::Number stop(const Napi::CallbackInfo &);
+Napi::Boolean changeState(const Napi::CallbackInfo &);
+Napi::Boolean setup(const Napi::CallbackInfo &);
+Napi::Boolean stop(const Napi::CallbackInfo &);
 
 lc::StateChange createStateChange(Napi::Object &);
 Napi::Object create_js_StateChange(Napi::Env &, lc::StateChange &);

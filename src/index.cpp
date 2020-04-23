@@ -1,30 +1,30 @@
 #include "index.h"
 
-Napi::Number changeState(const Napi::CallbackInfo &info)
+Napi::Boolean changeState(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
     Napi::Object js_sc = info[0].As<Napi::Object>();
     lc::StateChange sc = createStateChange(js_sc);
-    int res = lc::enqueueStateChange(sc);
-    if (res)
+    if (!lc::enqueueStateChange(sc))
     {
-        lc::js_log("LivingColors.changeState() failed: internal error");
+        lc::js_log("LivingColors exception: error in native code");
+        return Napi::Boolean::New(env, false);
     }
-    return Napi::Number::New(env, res);
+    return Napi::Boolean::New(env, true);
 }
 
-Napi::Number setup(const Napi::CallbackInfo &info)
+Napi::Boolean setup(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
     if (info.Length() < 2)
     {
-        lc::js_log("LivingColors.setup() failed: wrong number of arguments");
-        return Napi::Number::New(env, -1);
+        lc::js_log("LivingColors exception: wrong number of arguments");
+        return Napi::Boolean::New(env, false);
     }
     if (!info[0].IsFunction() || !info[1].IsFunction())
     {
-        lc::js_log("LivingColors.setup() failed: argument of wrong type");
-        return Napi::Number::New(env, -1);
+        lc::js_log("LivingColors exception: argument of wrong type");
+        return Napi::Boolean::New(env, false);
     }
     tsf_log = Napi::ThreadSafeFunction::New(
         env,
@@ -38,22 +38,22 @@ Napi::Number setup(const Napi::CallbackInfo &info)
         "JavaScript changeState callback",
         0,
         1);
-    int res = lc::setup();
-    if (res)
+    if (!lc::setup())
     {
-        lc::js_log("LivingColors.setup() failed: internal error");
+        lc::js_log("LivingColors exception: error in native code");
+        return Napi::Boolean::New(env, false);
     }
     else
     {
-        lc::js_log("LivingColors.setup() successful");
+        lc::js_log("LivingColors info: setup successful");
     }
-    return Napi::Number::New(env, res);
+    return Napi::Boolean::New(env, true);
 }
 
-Napi::Number stop(const Napi::CallbackInfo &info)
+Napi::Boolean stop(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
-    return Napi::Number::New(env, 0);
+    return Napi::Boolean::New(env, false);
 }
 
 lc::StateChange createStateChange(Napi::Object &js_sc)

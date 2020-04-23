@@ -13,8 +13,20 @@
 namespace cc2500
 {
 
+bool setup();
+void release();
+
 unsigned char getMode();
+void setMode(unsigned char);
+
+void set_TXOFF_mode(unsigned char);
+
 unsigned char getRXbytes();
+
+void empty_RXFIFO();
+
+unsigned char *receive();
+void transmit(unsigned char *);
 
 } // namespace cc2500
 
