@@ -1,11 +1,11 @@
 #include "index.h"
 
-Napi::Boolean changeState(const Napi::CallbackInfo &info)
+Napi::Boolean change_state(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
     Napi::Object js_sc = info[0].As<Napi::Object>();
-    lc::StateChange sc = createStateChange(js_sc);
-    if (!lc::enqueueStateChange(sc))
+    lc::StateChange sc = create_StateChange(js_sc);
+    if (!lc::enqueue_StateChange(sc))
     {
         lc::js_log("LivingColors exception: error in native code");
         return Napi::Boolean::New(env, false);
@@ -32,7 +32,7 @@ Napi::Boolean setup(const Napi::CallbackInfo &info)
         "JavaScript log callback",
         0,
         1);
-    tsf_changeState = Napi::ThreadSafeFunction::New(
+    tsf_change_state = Napi::ThreadSafeFunction::New(
         env,
         info[1].As<Napi::Function>(),
         "JavaScript changeState callback",
@@ -56,7 +56,7 @@ Napi::Boolean stop(const Napi::CallbackInfo &info)
     return Napi::Boolean::New(env, false);
 }
 
-lc::StateChange createStateChange(Napi::Object &js_sc)
+lc::StateChange create_StateChange(Napi::Object &js_sc)
 {
     lc::StateChange sc;
     sc.lamp = NapiValue_uint32(js_sc.Get(LC_SC_LAMP));
@@ -94,15 +94,15 @@ void js_cb_log(Napi::Env env, Napi::Function js_log, std::string *msg)
     delete msg;
 }
 
-void js_cb_changeState(Napi::Env env, Napi::Function js_changeState, lc::StateChange *sc)
+void js_cb_change_state(Napi::Env env, Napi::Function js_change_state, lc::StateChange *sc)
 {
-    js_changeState.Call({create_js_StateChange(env, *sc)});
+    js_change_state.Call({create_js_StateChange(env, *sc)});
     delete sc;
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
-    exports.Set(Napi::String::New(env, "changeState"), Napi::Function::New(env, changeState));
+    exports.Set(Napi::String::New(env, "changeState"), Napi::Function::New(env, change_state));
     exports.Set(Napi::String::New(env, "setup"), Napi::Function::New(env, setup));
     exports.Set(Napi::String::New(env, "stop"), Napi::Function::New(env, stop));
     return exports;

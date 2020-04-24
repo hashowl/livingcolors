@@ -16,12 +16,12 @@ namespace cc2500
 bool setup();
 void release();
 
-unsigned char getMode();
-void setMode(unsigned char);
+unsigned char get_mode();
+void set_mode(unsigned char);
 
 void set_TXOFF_mode(unsigned char);
 
-unsigned char getRXbytes();
+unsigned char get_RX_bytes();
 
 void empty_RXFIFO();
 

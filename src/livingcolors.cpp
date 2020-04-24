@@ -60,8 +60,8 @@ auto cc2500_ready_timeout = 1500ms;
 auto cc2500_RX_timeout = 600ms;
 auto cc2500_TX_timeout = 500ms;
 auto cc2500_ACK_timeout = 1600ms;
-auto cc2500_tryMode_timeout = 300ms;
-auto cc2500_awaitMode_timeout = 300ms;
+auto cc2500_try_mode_timeout = 300ms;
+auto cc2500_await_mode_timeout = 300ms;
 
 // delays
 auto cc2500_setup_retry_delay = 1000ms;
@@ -107,7 +107,7 @@ bool setup()
         start_threads();
         cc2500_ready = true;
         reset_flag = false;
-        cc2500::setMode(CC2500_MODE_RX);
+        cc2500::set_mode(CC2500_MODE_RX);
     }
     return true;
 }
@@ -139,7 +139,7 @@ void RX_loop()
             return;
         }
         // the mode is RX, FSTXON or a transitional state
-        unsigned char mode = cc2500::getMode();
+        unsigned char mode = cc2500::get_mode();
         if (mode == CC2500_MODE_RX)
         {
             // the mode is still RX, the packet was discarded
@@ -149,7 +149,7 @@ void RX_loop()
         if (mode != CC2500_MODE_FSTXON)
         {
             // the mode is about to change to FSTXON or to RX
-            if (!tryMode(CC2500_MODE_FSTXON))
+            if (!try_mode(CC2500_MODE_FSTXON))
             {
                 initiate_reset();
                 return;
@@ -157,11 +157,11 @@ void RX_loop()
         }
         // the mode is FSTXON
         // we need to check the RX FIFO for a packet
-        unsigned char RX_bytes = cc2500::getRXbytes();
+        unsigned char RX_bytes = cc2500::get_RX_bytes();
         if (RX_bytes == 0)
         {
             // the RX FIFO was flushed and we can restart RX
-            cc2500::setMode(CC2500_MODE_RX);
+            cc2500::set_mode(CC2500_MODE_RX);
             continue;
         }
         else if (RX_bytes == LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH)
@@ -178,7 +178,7 @@ void RX_loop()
                     {
                         cc2500::set_TXOFF_mode(CC2500_MODE_FSTXON);
                     }
-                    unsigned char *pkt_ACK = createPacketACK(pkt);
+                    unsigned char *pkt_ACK = create_packet_ACK(pkt);
                     cc2500_ready = false;
                     await_TX = true;
                     cc2500::transmit(pkt_ACK);
@@ -201,7 +201,7 @@ void RX_loop()
                     }
                     if (await_RX)
                     {
-                        if (!awaitMode(CC2500_MODE_FSTXON))
+                        if (!await_mode(CC2500_MODE_FSTXON))
                         {
                             initiate_reset();
                             return;
@@ -236,17 +236,17 @@ void RX_loop()
                         // we received a packet from a lamp
                         if (await_ACK)
                         {
-                            if (testACK(pkt))
+                            if (test_ACK(pkt))
                             {
                                 await_ACK = false;
-                                cc2500::setMode(CC2500_MODE_RX);
+                                cc2500::set_mode(CC2500_MODE_RX);
                                 lck_cc2500.unlock();
                                 await_ACK_cv.notify_one();
                             }
                             else
                             {
                                 js_log("LivingColors warning: received wrong ACK");
-                                cc2500::setMode(CC2500_MODE_RX);
+                                cc2500::set_mode(CC2500_MODE_RX);
                             }
                             free(pkt);
                             continue;
@@ -282,7 +282,7 @@ void RX_loop()
             await_RX_cv.notify_one();
             continue;
         }
-        cc2500::setMode(CC2500_MODE_RX);
+        cc2500::set_mode(CC2500_MODE_RX);
     }
 }
 
@@ -309,13 +309,13 @@ void TX_loop()
             return;
         }
         // the mode is RX, FSTXON or a transitional state
-        if (!tryMode(CC2500_MODE_FSTXON))
+        if (!try_mode(CC2500_MODE_FSTXON))
         {
             initiate_reset();
             return;
         }
         // the mode is FSTXON
-        if (cc2500::getRXbytes() != 0)
+        if (cc2500::get_RX_bytes() != 0)
         {
             // the RX FIFO is not empty and might contain a valid packet
             await_RX = true;
@@ -384,13 +384,13 @@ void cc2500_ISR()
     }
 }
 
-bool awaitMode(unsigned char mode)
+bool await_mode(unsigned char mode)
 {
     auto t0 = std::chrono::high_resolution_clock::now();
-    while (cc2500::getMode() != mode)
+    while (cc2500::get_mode() != mode)
     {
         auto dt = std::chrono::high_resolution_clock::now() - t0;
-        if (dt > cc2500_awaitMode_timeout)
+        if (dt > cc2500_await_mode_timeout)
         {
             std::string msg = "LivingColors exception: timeout expired while waiting for the mode to change to " + std::to_string(mode);
             js_log(msg.c_str());
@@ -400,19 +400,19 @@ bool awaitMode(unsigned char mode)
     return true;
 }
 
-bool tryMode(unsigned char mode)
+bool try_mode(unsigned char mode)
 {
     auto t0 = std::chrono::high_resolution_clock::now();
-    while (cc2500::getMode() != mode)
+    while (cc2500::get_mode() != mode)
     {
         auto dt = std::chrono::high_resolution_clock::now() - t0;
-        if (dt > cc2500_tryMode_timeout)
+        if (dt > cc2500_try_mode_timeout)
         {
             std::string msg = "LivingColors exception: timeout expired while trying to change the mode to " + std::to_string(mode);
             js_log(msg.c_str());
             return false;
         }
-        cc2500::setMode(mode);
+        cc2500::set_mode(mode);
     }
     return true;
 }
@@ -472,14 +472,14 @@ void join_threads()
     RX_processing_thread.join();
 }
 
-bool enqueueStateChange(StateChange &sc)
+bool enqueue_StateChange(StateChange &sc)
 {
     if (reset_flag.load())
     {
         js_log("LivingColors exception: reset flag is set");
         return false;
     }
-    unsigned char *pkt = createPacket(sc);
+    unsigned char *pkt = create_packet(sc);
     {
         std::lock_guard<std::mutex> lck_TX_queue(TX_queue_mtx);
         if (TX_queue.size() < 10)
@@ -496,7 +496,7 @@ bool enqueueStateChange(StateChange &sc)
     return true;
 }
 
-StateChange createStateChange(unsigned char *pkt, uint32_t lamp)
+StateChange create_StateChange(unsigned char *pkt, uint32_t lamp)
 {
     StateChange sc;
     sc.lamp = lamp;
@@ -507,7 +507,7 @@ StateChange createStateChange(unsigned char *pkt, uint32_t lamp)
     return sc;
 }
 
-unsigned char *createPacket(StateChange &sc)
+unsigned char *create_packet(StateChange &sc)
 {
     unsigned char *pkt = (unsigned char *)malloc(LC_HEADER_LENGTH + LC_PACKET_LENGTH);
     pkt[LC_OFFSET_LENGTH] = LC_PACKET_LENGTH;
@@ -526,7 +526,7 @@ unsigned char *createPacket(StateChange &sc)
     return pkt;
 }
 
-unsigned char *createPacketACK(unsigned char *pkt)
+unsigned char *create_packet_ACK(unsigned char *pkt)
 {
     unsigned char *pkt_ACK = (unsigned char *)malloc(LC_HEADER_LENGTH + LC_PACKET_LENGTH);
     memcpy(pkt_ACK, pkt, LC_HEADER_LENGTH + LC_PACKET_LENGTH);
@@ -536,7 +536,7 @@ unsigned char *createPacketACK(unsigned char *pkt)
     return pkt_ACK;
 }
 
-bool testACK(unsigned char *pkt_ACK)
+bool test_ACK(unsigned char *pkt_ACK)
 {
     if (memcmp(pkt_ACK + LC_OFFSET_SRC_ADDR, last_packet + LC_OFFSET_DST_ADDR, LC_ADDR_LENGHT))
         return false;
@@ -559,9 +559,9 @@ void js_log(const char *msg)
     tsf_log.BlockingCall(new std::string(msg), js_cb_log);
 }
 
-void js_changeState(StateChange &sc)
+void js_change_state(StateChange &sc)
 {
-    tsf_changeState.BlockingCall(new StateChange(sc), js_cb_changeState);
+    tsf_change_state.BlockingCall(new StateChange(sc), js_cb_change_state);
 }
 
 } // namespace lc

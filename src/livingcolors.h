@@ -40,24 +40,24 @@ void RX_processing_loop();
 
 void cc2500_ISR();
 
-bool awaitMode(unsigned char);
-bool tryMode(unsigned char);
+bool await_mode(unsigned char);
+bool try_mode(unsigned char);
 
 void initiate_reset();
 void reset();
 void notify_threads();
 void join_threads();
 
-bool enqueueStateChange(StateChange &);
+bool enqueue_StateChange(StateChange &);
 
-StateChange createStateChange(unsigned char *, uint32_t);
-unsigned char *createPacket(StateChange &);
-unsigned char *createPacketACK(unsigned char *);
-bool testACK(unsigned char *);
+StateChange create_StateChange(unsigned char *, uint32_t);
+unsigned char *create_packet(StateChange &);
+unsigned char *create_packet_ACK(unsigned char *);
+bool test_ACK(unsigned char *);
 void inc_sequence_nr(unsigned char *);
 
 void js_log(const char *);
-void js_changeState(StateChange &);
+void js_change_state(StateChange &);
 
 } // namespace lc
 

@@ -11,11 +11,11 @@ void release()
 {
 }
 
-unsigned char getMode()
+unsigned char get_mode()
 {
 }
 
-void setMode(unsigned char mode)
+void set_mode(unsigned char mode)
 {
 }
 
@@ -23,7 +23,7 @@ void set_TXOFF_mode(unsigned char mode)
 {
 }
 
-unsigned char getRXbytes()
+unsigned char get_RX_bytes()
 {
 }
 

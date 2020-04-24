@@ -16,20 +16,20 @@
 #include "livingcolors.h"
 
 extern Napi::ThreadSafeFunction tsf_log;
-extern Napi::ThreadSafeFunction tsf_changeState;
+extern Napi::ThreadSafeFunction tsf_change_state;
 
-Napi::Boolean changeState(const Napi::CallbackInfo &);
+Napi::Boolean change_state(const Napi::CallbackInfo &);
 Napi::Boolean setup(const Napi::CallbackInfo &);
 Napi::Boolean stop(const Napi::CallbackInfo &);
 
-lc::StateChange createStateChange(Napi::Object &);
+lc::StateChange create_StateChange(Napi::Object &);
 Napi::Object create_js_StateChange(Napi::Env &, lc::StateChange &);
 
 unsigned char NapiValue_uint8(Napi::Value &);
 uint32_t NapiValue_uint32(Napi::Value &);
 
 void js_cb_log(Napi::Env, Napi::Function, std::string *);
-void js_cb_changeState(Napi::Env, Napi::Function, lc::StateChange *);
+void js_cb_change_state(Napi::Env, Napi::Function, lc::StateChange *);
 
 Napi::Object Init(Napi::Env, Napi::Object);
 
