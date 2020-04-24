@@ -18,6 +18,8 @@
 
 #define LC_PTCL_INFO 17
 
+#include <cstdint>
+
 namespace lc
 {
 
@@ -37,6 +39,7 @@ void start_threads();
 void RX_loop();
 void TX_loop();
 void RX_processing_loop();
+void FSCAL_loop();
 
 void cc2500_ISR();
 
