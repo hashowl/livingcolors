@@ -10,10 +10,18 @@
 #define CC2500_MODE_RXFIFO_OVERFLOW 6
 #define CC2500_MODE_TXFIFO_UNDERFLOW 7
 
+#define CC2500_PIN_GDO2 5
+#define CC2500_PIN_LEN 6
+
+#define CC2500_SPI_FREQ_HZ 6000000
+#define CC2500_SPI_CHANNEL 0
+
 namespace cc2500
 {
 
 bool setup();
+bool setup_SPI();
+
 void release();
 
 unsigned char get_mode();

@@ -1,9 +1,22 @@
+#include <wiringPi.h>
+#include <wiringPiSPI.h>
 #include "cc2500.h"
+#include "cc2500_reg.h"
+#include "livingcolors.h"
 
 namespace cc2500
 {
 
 bool setup()
+{
+    if (!setup_SPI())
+    {
+        lc::js_log("LivingColors exception: SPI setup failed");
+        return false;
+    }
+}
+
+bool setup_SPI()
 {
 }
 
