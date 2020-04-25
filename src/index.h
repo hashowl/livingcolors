@@ -15,9 +15,6 @@
 #include <string>
 #include "livingcolors.h"
 
-extern Napi::ThreadSafeFunction tsf_log;
-extern Napi::ThreadSafeFunction tsf_change_state;
-
 Napi::Boolean change_state(const Napi::CallbackInfo &);
 Napi::Boolean setup(const Napi::CallbackInfo &);
 Napi::Boolean stop(const Napi::CallbackInfo &);

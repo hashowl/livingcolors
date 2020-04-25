@@ -1,7 +1,7 @@
 #include "index.h"
 
 Napi::ThreadSafeFunction tsf_log;
-Napi::ThreadSafeFunction tsf_changeState;
+Napi::ThreadSafeFunction tsf_change_state;
 
 Napi::Boolean change_state(const Napi::CallbackInfo &info)
 {

@@ -8,6 +8,9 @@
 #include "cc2500.h"
 #include "cc2500_reg.h"
 
+extern Napi::ThreadSafeFunction tsf_log;
+extern Napi::ThreadSafeFunction tsf_change_state;
+
 namespace lc
 {
 

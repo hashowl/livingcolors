@@ -11,4 +11,4 @@ livingcolors.setup(
     }
 );
 
-console.log("initialization script compelted");
+console.log("initialization script completed");
