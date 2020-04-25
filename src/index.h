@@ -25,8 +25,8 @@ Napi::Boolean stop(const Napi::CallbackInfo &);
 lc::StateChange create_StateChange(Napi::Object &);
 Napi::Object create_js_StateChange(Napi::Env &, lc::StateChange &);
 
-unsigned char NapiValue_uint8(Napi::Value &);
-uint32_t NapiValue_uint32(Napi::Value &);
+unsigned char NapiValue_uint8(Napi::Value);
+uint32_t NapiValue_uint32(Napi::Value);
 
 void js_cb_log(Napi::Env, Napi::Function, std::string *);
 void js_cb_change_state(Napi::Env, Napi::Function, lc::StateChange *);

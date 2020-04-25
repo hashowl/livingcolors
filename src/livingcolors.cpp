@@ -114,7 +114,7 @@ bool setup()
         if (!await_mode(CC2500_MODE_IDLE))
         {
             js_log("LivingColors exception: the cc2500 failed to go to IDLE after setup");
-            return;
+            return false;
         }
         start_threads();
         cc2500_ready = true;
@@ -627,8 +627,7 @@ bool try_mode(unsigned char mode)
         if (!cc2500::set_mode(mode))
         {
             js_log("LivingColors exception: setting mode in try mode failed");
-            initiate_reset();
-            return;
+            return false;
         }
     }
     return true;

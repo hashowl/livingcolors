@@ -1,5 +1,8 @@
 #include "index.h"
 
+Napi::ThreadSafeFunction tsf_log;
+Napi::ThreadSafeFunction tsf_changeState;
+
 Napi::Boolean change_state(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
@@ -78,12 +81,12 @@ Napi::Object create_js_StateChange(Napi::Env &env, lc::StateChange &sc)
     return js_sc;
 }
 
-unsigned char NapiValue_uint8(Napi::Value &value)
+unsigned char NapiValue_uint8(Napi::Value value)
 {
     return (unsigned char)NapiValue_uint32(value);
 }
 
-uint32_t NapiValue_uint32(Napi::Value &value)
+uint32_t NapiValue_uint32(Napi::Value value)
 {
     return value.As<Napi::Number>().Uint32Value();
 }
