@@ -56,7 +56,11 @@ Napi::Boolean setup(const Napi::CallbackInfo &info)
 Napi::Boolean stop(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
-    return Napi::Boolean::New(env, false);
+    lc::js_log("LivingColors info: stopping...");
+    lc::stop();
+    tsf_log.Release();
+    tsf_change_state.Release();
+    return Napi::Boolean::New(env, true);
 }
 
 lc::StateChange create_StateChange(Napi::Object &js_sc)

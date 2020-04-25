@@ -139,6 +139,13 @@ void start_threads()
     FSCAL_thread = std::thread(FSCAL_loop);
 }
 
+void stop()
+{
+    notify_threads();
+    join_threads();
+    cc2500::release();
+}
+
 void RX_loop()
 {
     while (true)
@@ -644,9 +651,7 @@ void initiate_reset()
 
 void reset()
 {
-    notify_threads();
-    join_threads();
-    cc2500::release();
+    stop();
     {
         std::lock_guard<std::mutex> lck_cc2500(cc2500_mtx);
         cc2500_ready = false;
@@ -687,10 +692,14 @@ void notify_threads()
 
 void join_threads()
 {
-    RX_thread.join();
-    TX_thread.join();
-    RX_processing_thread.join();
-    FSCAL_thread.join();
+    if (RX_thread.joinable())
+        RX_thread.join();
+    if (TX_thread.joinable())
+        TX_thread.join();
+    if (RX_processing_thread.joinable())
+        RX_processing_thread.join();
+    if (FSCAL_thread.joinable())
+        FSCAL_thread.join();
 }
 
 bool enqueue_StateChange(StateChange &sc)

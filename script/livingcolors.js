@@ -1,14 +1,29 @@
 const livingcolors = require('livingcolors');
 
-console.log("starting livingcolors bridge service...");
+function main() {
 
-livingcolors.setup(
-    function (msg) {
-        console.log(msg);
-    },
-    function (msg) {
-        console.log(msg);
-    }
-);
+    console.log("running initialization script...");
 
-console.log("initialization script completed");
+    // registering callbacks
+    console.log("registering callbacks...");
+    onStop(function () {
+        console.log("running onStop...");
+        livingcolors.stop();
+        console.log("onStop completed");
+    }, 3000);
+
+    // livingcolors native setup
+    console.log("starting livingcolors bridge service...");
+    livingcolors.setup(
+        function (msg) {
+            console.log(msg);
+        },
+        function (msg) {
+            console.log(msg);
+        }
+    );
+
+    console.log("initialization script completed");
+}
+
+main();

@@ -36,6 +36,8 @@ public:
 bool setup();
 void start_threads();
 
+void stop();
+
 void RX_loop();
 void TX_loop();
 void RX_processing_loop();
