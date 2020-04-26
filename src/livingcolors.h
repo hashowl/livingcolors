@@ -15,6 +15,11 @@
 #define LC_OFFSET_HUE 12
 #define LC_OFFSET_SATURATION 13
 #define LC_OFFSET_VALUE 14
+#define LC_OFFSET_RSSI 15
+#define LC_OFFSET_CRC 16
+#define LC_OFFSET_LQI 16
+
+#define LC_MSK_CRC 0b10000000
 
 #define LC_PTCL_INFO 17
 
@@ -38,12 +43,11 @@ void start_threads();
 
 void stop();
 
+void cc2500_ISR();
+
 void RX_loop();
 void TX_loop();
-void RX_processing_loop();
 void FSCAL_loop();
-
-void cc2500_ISR();
 
 bool await_mode(unsigned char);
 bool try_mode(unsigned char);
@@ -59,6 +63,7 @@ StateChange create_StateChange(unsigned char *, uint32_t);
 unsigned char *create_packet(StateChange &);
 unsigned char *create_packet_ACK(unsigned char *);
 bool test_ACK(unsigned char *);
+bool test_CRC(unsigned char *);
 void inc_sequence_nr(unsigned char *);
 
 void js_log(const char *);
