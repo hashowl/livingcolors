@@ -40,6 +40,7 @@ bool setup()
         lc::js_log("LivingColors exception: INT setup failed");
         return false;
     }
+    lc::js_log("LivingColors info: cc2500 setup successful");
     return true;
 }
 

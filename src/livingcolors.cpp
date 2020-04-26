@@ -119,9 +119,9 @@ bool setup()
             js_log("LivingColors exception: the cc2500 failed to go to IDLE after setup");
             return false;
         }
-        start_threads();
         cc2500_ready = true;
         reset_flag = false;
+        start_threads();
         if (!cc2500::set_mode(CC2500_MODE_RX))
         {
             js_log("LivingColors exception: starting RX during setup failed");
@@ -165,6 +165,13 @@ void RX_loop()
             initiate_reset();
             return;
         }
+        // we need to check the RX FIFO for a packet
+        unsigned char RX_bytes = cc2500::get_RX_bytes();
+        if (RX_bytes == CC2500_ERR)
+        {
+            initiate_reset();
+            return;
+        }
         // the mode is RX, FSTXON or a transitional state
         unsigned char mode = cc2500::get_mode();
         if (mode == CC2500_ERR)
@@ -172,9 +179,9 @@ void RX_loop()
             initiate_reset();
             return;
         }
-        if (mode == CC2500_MODE_RX)
+        if (mode == CC2500_MODE_RX && RX_bytes == 0x00)
         {
-            // the mode is still RX, the packet was discarded
+            // the mode is still RX and the packet was discarded
             // we don't need to do anything
             continue;
         }
@@ -189,7 +196,7 @@ void RX_loop()
         }
         // the mode is FSTXON
         // we need to check the RX FIFO for a packet
-        unsigned char RX_bytes = cc2500::get_RX_bytes();
+        RX_bytes = cc2500::get_RX_bytes();
         if (RX_bytes == CC2500_ERR)
         {
             initiate_reset();
@@ -583,16 +590,15 @@ void cc2500_ISR()
         lck_cc2500.unlock();
         await_TX_cv.notify_one();
     }
-    else if (!await_TX.load())
+    else
     {
+        if (await_TX.load())
+        {
+            js_log("LivingColors warning: delayed INT received");
+        }
         RX_pending = true;
         lck_cc2500.unlock();
         RX_pending_cv.notify_one();
-    }
-    else
-    {
-        js_log("LivingColors warning: delayed INT received");
-        return;
     }
 }
 
