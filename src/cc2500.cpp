@@ -63,7 +63,7 @@ bool setup_cc2500()
     success &= send_cmd_value(CC2500_REG_IOCFG2, 0x06);   // Output PKTCTRL interrupt on GDO2
     success &= send_cmd_value(CC2500_REG_IOCFG0, 0x5B);   // Output inverted PA_PD signal on GDO0
     success &= send_cmd_value(CC2500_REG_PKTLEN, 0x0E);   // Set maximum PACKET LENGTH of 14 bytes (excl. LENGTH field and CRC)
-    success &= send_cmd_value(CC2500_REG_PKTCTRL1, 0x0D); // Enable CRC autoflush, append 2 STATUS bytes and perform ADDR check
+    success &= send_cmd_value(CC2500_REG_PKTCTRL1, 0x05); // Disable CRC autoflush, append 2 STATUS bytes and perform ADDR check
     success &= send_cmd_value(CC2500_REG_PKTCTRL0, 0x45); // Enable CRC and detection of packet LENGTH
     success &= send_cmd_value(CC2500_REG_ADDR, 0xAA);     // Device address is 0xAA
     // frequency configuration

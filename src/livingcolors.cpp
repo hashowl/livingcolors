@@ -156,6 +156,12 @@ void cc2500_ISR()
     }
     // RX ISR
     // the mode is (or is transitioning to) RX or FSTXON
+    if (!try_mode(CC2500_MODE_FSTXON))
+    {
+        initiate_reset();
+        return;
+    }
+    // the mode is FSTXON
     unsigned char RX_bytes = cc2500::get_RX_bytes();
     if (RX_bytes == CC2500_ERR)
     {
@@ -164,11 +170,15 @@ void cc2500_ISR()
     }
     if (RX_bytes == 0x00)
     {
-        // the mode is still RX and the packet was discarded
-        // we don't need to do anything
+        // the packet was discarded, restart RX
+        if (!cc2500::set_mode(CC2500_MODE_RX))
+        {
+            js_log("LivingColors exception: restarting RX failed");
+            initiate_reset();
+            return;
+        }
         return;
     }
-    // the mode is (or is transitioning to) FSTXON
     if (RX_bytes == LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH)
     {
         // the RX FIFO contains a packet
@@ -376,24 +386,26 @@ void TX_loop()
             return;
         }
         // the mode is FSTXON
-        unsigned char RX_bytes = cc2500::get_RX_bytes();
-        if (RX_bytes == CC2500_ERR)
         {
-            initiate_reset();
-            return;
-        }
-        if (RX_bytes != 0x00)
-        {
-            await_RX = true;
-            if (!await_RX_cv.wait_for(lck_cc2500, cc2500_RX_timeout, [] { return !await_RX; }))
+            unsigned char RX_bytes = cc2500::get_RX_bytes();
+            if (RX_bytes == CC2500_ERR)
             {
-                js_log("LivingColors exception: timeout expired while waiting for RX");
                 initiate_reset();
                 return;
             }
-            if (send_pkt_ACK)
+            if (RX_bytes != 0x00)
             {
-                goto l_send_pkt_ACK;
+                await_RX = true;
+                if (!await_RX_cv.wait_for(lck_cc2500, cc2500_RX_timeout, [] { return !await_RX; }))
+                {
+                    js_log("LivingColors exception: timeout expired while waiting for RX");
+                    initiate_reset();
+                    return;
+                }
+                if (send_pkt_ACK)
+                {
+                    goto l_send_pkt_ACK;
+                }
             }
         }
     l_send_pkt_TX:
