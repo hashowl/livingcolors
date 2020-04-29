@@ -45,6 +45,7 @@ void stop();
 
 void cc2500_ISR();
 
+void ISR_loop();
 void RX_loop();
 void TX_loop();
 void FSCAL_loop();

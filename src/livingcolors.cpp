@@ -22,6 +22,12 @@ std::atomic<bool> reset_flag(true);
 // cc2500
 std::mutex cc2500_mtx;
 
+// ISR thread
+std::thread ISR_thread;
+std::condition_variable INT_pending_cv;
+int INT_count;
+std::mutex INT_count_mtx;
+
 // RX thread
 std::thread RX_thread;
 std::condition_variable RX_pending_cv;
@@ -129,6 +135,7 @@ bool setup()
 
 void start_threads()
 {
+    ISR_thread = std::thread(ISR_loop);
     RX_thread = std::thread(RX_loop);
     TX_thread = std::thread(TX_loop);
     FSCAL_thread = std::thread(FSCAL_loop);
@@ -145,149 +152,168 @@ void cc2500_ISR()
 {
     if (reset_flag.load())
         return;
-    std::unique_lock<std::mutex> lck_cc2500(cc2500_mtx);
-    if (await_TX)
     {
-        // TX ISR
-        await_TX = false;
-        lck_cc2500.unlock();
-        await_TX_cv.notify_one();
-        return;
+        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+        ++INT_count;
     }
-    // RX ISR
-    // the mode is (or is transitioning to) RX or FSTXON
-    if (!try_mode(CC2500_MODE_FSTXON))
+    INT_pending_cv.notify_one();
+}
+
+void ISR_loop()
+{
+    while (true)
     {
-        initiate_reset();
-        return;
-    }
-    // the mode is FSTXON
-    unsigned char RX_bytes = cc2500::get_RX_bytes();
-    if (RX_bytes == CC2500_ERR)
-    {
-        initiate_reset();
-        return;
-    }
-    if (RX_bytes == 0x00)
-    {
-        // the packet was discarded, restart RX
+        {
+            std::unique_lock<std::mutex> lck_INT_count(INT_count_mtx);
+            INT_pending_cv.wait(lck_INT_count, [] { return (INT_count > 0) || reset_flag.load(); });
+            if (reset_flag.load())
+                return;
+            --INT_count;
+        }
+        std::unique_lock<std::mutex> lck_cc2500(cc2500_mtx);
+        if (await_TX)
+        {
+            // TX ISR
+            await_TX = false;
+            lck_cc2500.unlock();
+            await_TX_cv.notify_one();
+            continue;
+        }
+        // RX ISR
+        // the mode is (or is transitioning to) RX or FSTXON
+        if (!try_mode(CC2500_MODE_FSTXON))
+        {
+            initiate_reset();
+            return;
+        }
+        // the mode is FSTXON
+        unsigned char RX_bytes = cc2500::get_RX_bytes();
+        if (RX_bytes == CC2500_ERR)
+        {
+            initiate_reset();
+            return;
+        }
+        if (RX_bytes == 0x00)
+        {
+            // the packet was discarded, restart RX
+            if (!cc2500::set_mode(CC2500_MODE_RX))
+            {
+                js_log("LivingColors exception: restarting RX failed");
+                initiate_reset();
+                return;
+            }
+            continue;
+        }
+        if (RX_bytes == LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH)
+        {
+            // the RX FIFO contains a packet
+            unsigned char *pkt = cc2500::receive();
+            if (!pkt)
+            {
+                lc::js_log("LivingColors exception: RX failed");
+                initiate_reset();
+                return;
+            }
+            if (test_CRC(pkt))
+            {
+                if (memcmp(pkt + LC_OFFSET_DST_ADDR, bridge, LC_ADDR_LENGHT) == 0)
+                {
+                    if (memcmp(pkt + LC_OFFSET_SRC_ADDR, remotes[0], LC_ADDR_LENGHT) == 0)
+                    {
+                        // we received a packet from the remote
+                        pkt_ACK = create_packet_ACK(pkt);
+                        send_pkt_ACK = true;
+                        await_RX = false;
+                        lck_cc2500.unlock();
+                        TX_pending_cv.notify_one();
+                        await_RX_cv.notify_one();
+                        await_ACK_cv.notify_one();
+                        {
+                            std::lock_guard<std::mutex> lck_RX_queue(RX_queue_mtx);
+                            RX_queue.push(pkt);
+                            if (RX_queue.size() > 10)
+                            {
+                                js_log("LivingColors warning: RX queue size > 10");
+                            }
+                        }
+                        RX_pending_cv.notify_one();
+                        continue;
+                    }
+                    else
+                    {
+                        bool valid = false;
+                        for (int i = 0; i < num_lamps; i++)
+                        {
+                            if (memcmp(pkt + LC_OFFSET_SRC_ADDR, lamps[i], LC_ADDR_LENGHT) == 0)
+                            {
+                                valid = true;
+                                break;
+                            }
+                        }
+                        if (valid)
+                        {
+                            // we received a packet from a lamp
+                            if (await_ACK)
+                            {
+                                if (test_ACK(pkt))
+                                {
+                                    await_ACK = false;
+                                    if (!cc2500::set_mode(CC2500_MODE_RX))
+                                    {
+                                        js_log("LivingColors exception: restarting RX failed");
+                                        initiate_reset();
+                                        return;
+                                    }
+                                    lck_cc2500.unlock();
+                                    await_ACK_cv.notify_one();
+                                    await_RX_cv.notify_one();
+                                    free(pkt);
+                                    continue;
+                                }
+                                js_log("LivingColors warning: received wrong ACK");
+                            }
+                            else
+                            {
+                                js_log("LivingColors warning: received unexpected ACK");
+                            }
+                        }
+                        else
+                        {
+                            js_log("LivingColors warning: received packet contained wrong source address");
+                        }
+                    }
+                }
+                else
+                {
+                    js_log("LivingColors warning: received packet contained wrong destination address");
+                }
+            }
+            free(pkt);
+        }
+        else
+        {
+            // the RX FIFO contains an invalid number of bytes
+            js_log("LivingColors warning: RX FIFO contains invalid number of bytes");
+            if (!cc2500::empty_RXFIFO())
+            {
+                js_log("LivingColors exception: emptying RX FIFO failed");
+                initiate_reset();
+                return;
+            }
+        }
+        if (await_RX)
+        {
+            await_RX = false;
+            lck_cc2500.unlock();
+            await_RX_cv.notify_one();
+            continue;
+        }
         if (!cc2500::set_mode(CC2500_MODE_RX))
         {
             js_log("LivingColors exception: restarting RX failed");
             initiate_reset();
             return;
         }
-        return;
-    }
-    if (RX_bytes == LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH)
-    {
-        // the RX FIFO contains a packet
-        unsigned char *pkt = cc2500::receive();
-        if (!pkt)
-        {
-            lc::js_log("LivingColors exception: RX failed");
-            initiate_reset();
-            return;
-        }
-        if (test_CRC(pkt))
-        {
-            if (memcmp(pkt + LC_OFFSET_DST_ADDR, bridge, LC_ADDR_LENGHT) == 0)
-            {
-                if (memcmp(pkt + LC_OFFSET_SRC_ADDR, remotes[0], LC_ADDR_LENGHT) == 0)
-                {
-                    // we received a packet from the remote
-                    pkt_ACK = create_packet_ACK(pkt);
-                    send_pkt_ACK = true;
-                    await_RX = false;
-                    lck_cc2500.unlock();
-                    TX_pending_cv.notify_one();
-                    await_RX_cv.notify_one();
-                    await_ACK_cv.notify_one();
-                    {
-                        std::lock_guard<std::mutex> lck_RX_queue(RX_queue_mtx);
-                        RX_queue.push(pkt);
-                        if (RX_queue.size() > 10)
-                        {
-                            js_log("LivingColors warning: RX queue size > 10");
-                        }
-                    }
-                    RX_pending_cv.notify_one();
-                    return;
-                }
-                else
-                {
-                    bool valid = false;
-                    for (int i = 0; i < num_lamps; i++)
-                    {
-                        if (memcmp(pkt + LC_OFFSET_SRC_ADDR, lamps[i], LC_ADDR_LENGHT) == 0)
-                        {
-                            valid = true;
-                            break;
-                        }
-                    }
-                    if (valid)
-                    {
-                        // we received a packet from a lamp
-                        if (await_ACK)
-                        {
-                            if (test_ACK(pkt))
-                            {
-                                await_ACK = false;
-                                if (!cc2500::set_mode(CC2500_MODE_RX))
-                                {
-                                    js_log("LivingColors exception: restarting RX failed");
-                                    initiate_reset();
-                                    return;
-                                }
-                                lck_cc2500.unlock();
-                                await_ACK_cv.notify_one();
-                                await_RX_cv.notify_one();
-                                free(pkt);
-                                return;
-                            }
-                            js_log("LivingColors warning: received wrong ACK");
-                        }
-                        else
-                        {
-                            js_log("LivingColors warning: received unexpected ACK");
-                        }
-                    }
-                    else
-                    {
-                        js_log("LivingColors warning: received packet contained wrong source address");
-                    }
-                }
-            }
-            else
-            {
-                js_log("LivingColors warning: received packet contained wrong destination address");
-            }
-        }
-        free(pkt);
-    }
-    else
-    {
-        // the RX FIFO contains an invalid number of bytes
-        js_log("LivingColors warning: RX FIFO contains invalid number of bytes");
-        if (!cc2500::empty_RXFIFO())
-        {
-            js_log("LivingColors exception: emptying RX FIFO failed");
-            initiate_reset();
-            return;
-        }
-    }
-    if (await_RX)
-    {
-        await_RX = false;
-        lck_cc2500.unlock();
-        await_RX_cv.notify_one();
-        return;
-    }
-    if (!cc2500::set_mode(CC2500_MODE_RX))
-    {
-        js_log("LivingColors exception: restarting RX failed");
-        initiate_reset();
-        return;
     }
 }
 
@@ -601,6 +627,10 @@ void reset()
 {
     stop();
     {
+        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+        INT_count = 0;
+    }
+    {
         std::lock_guard<std::mutex> lck_cc2500(cc2500_mtx);
         await_RX = false;
         await_TX = false;
@@ -628,10 +658,12 @@ void reset()
 void notify_threads()
 {
     {
+        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
         std::lock_guard<std::mutex> lck_cc2500(cc2500_mtx);
         std::lock_guard<std::mutex> lck_RX_queue(RX_queue_mtx);
         reset_flag = true;
     }
+    INT_pending_cv.notify_one();
     RX_pending_cv.notify_one();
     TX_pending_cv.notify_one();
     FSCAL_cv.notify_one();
@@ -639,6 +671,8 @@ void notify_threads()
 
 void join_threads()
 {
+    if (ISR_thread.joinable())
+        ISR_thread.join();
     if (RX_thread.joinable())
         RX_thread.join();
     if (TX_thread.joinable())

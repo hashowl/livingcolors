@@ -39,7 +39,7 @@ bool setup_SPI();
 bool setup_cc2500();
 bool reset_cc2500();
 void setup_LNA_PA();
-bool setup_INT();
+bool setup_ISR();
 
 void release();
 

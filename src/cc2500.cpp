@@ -13,6 +13,9 @@ namespace cc2500
 
 using namespace std::chrono_literals;
 
+// state
+bool ISR_registered;
+
 // delays
 auto cc2500_reset_delay = 10ms;
 
@@ -35,7 +38,7 @@ bool setup()
         lc::js_log("LivingColors exception: cc2500 device setup failed");
         return false;
     }
-    if (!setup_INT())
+    if (!setup_ISR())
     {
         lc::js_log("LivingColors exception: INT setup failed");
         return false;
@@ -118,9 +121,11 @@ void setup_LNA_PA()
     digitalWrite(CC2500_PIN_LEN, true);
 }
 
-bool setup_INT()
+bool setup_ISR()
 {
-    return !(wiringPiISR(CC2500_PIN_GDO2, INT_EDGE_RISING, &lc::cc2500_ISR) < 0);
+    if (ISR_registered)
+        return true;
+    return ISR_registered = !(wiringPiISR(CC2500_PIN_GDO2, INT_EDGE_RISING, &lc::cc2500_ISR) < 0);
 }
 
 void release()
