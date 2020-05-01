@@ -1,11 +1,10 @@
 #ifndef LIVINGCOLORS_H
 #define LIVINGCOLORS_H
 
-#define LC_PACKET_LENGTH 14
-#define LC_HEADER_LENGTH 1
-#define LC_TRAILER_LENGTH 2
-#define LC_ADDR_LENGHT 4
+#define LC_LENGTH_PAYLOAD 14
+#define LC_LENGHT_ADDR 4
 
+// packet
 #define LC_OFFSET_LENGTH 0
 #define LC_OFFSET_DST_ADDR 1
 #define LC_OFFSET_SRC_ADDR 5
@@ -18,8 +17,6 @@
 #define LC_OFFSET_RSSI 15
 #define LC_OFFSET_CRC 16
 #define LC_OFFSET_LQI 16
-
-#define LC_MSK_CRC 0b10000000
 
 #define LC_PTCL_INFO 17
 
@@ -50,6 +47,8 @@ void RX_loop();
 void TX_loop();
 void FSCAL_loop();
 
+bool calibrate();
+
 bool await_mode(unsigned char);
 bool try_mode(unsigned char);
 
@@ -65,6 +64,7 @@ unsigned char *create_packet(StateChange &);
 unsigned char *create_packet_ACK(unsigned char *);
 bool test_ACK(unsigned char *);
 bool test_CRC(unsigned char *);
+bool test_lc(unsigned char *);
 void inc_sequence_nr(unsigned char *);
 
 void js_log(const char *);

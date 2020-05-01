@@ -11,16 +11,25 @@
 #define CC2500_MODE_TXFIFO_UNDERFLOW 7
 
 #define CC2500_SFT_CHIP_RDYn 7
-#define CC2500_MSK_STATE 0b01110000
 #define CC2500_SFT_STATE 4
+
+#define CC2500_MSK_STATE 0b01110000
 #define CC2500_MSK_TXOFF_MODE 0b00000011
+#define CC2500_MSK_CRC 0b10000000
 
-#define CC2500_CMD_LENGTH 1
-#define CC2500_VAL_LENGTH 1
+// packet
+#define CC2500_LENGTH_HEADER 1
+#define CC2500_LENGTH_TRAILER 2
 
-#define CC2500_CMD_OFFSET 0
-#define CC2500_PKT_OFFSET 1
-#define CC2500_VAL_OFFSET 1
+#define CC2500_OFFSET_HEADER 0
+#define CC2500_OFFSET_PAYLOAD 1
+
+// spi access
+#define CC2500_LENGTH_CMD 1
+#define CC2500_LENGTH_SINGLE_ACCESS 1
+
+#define CC2500_OFFSET_CMD 0
+#define CC2500_OFFSET_DATA 1
 
 #define CC2500_ERR 0xFF
 
@@ -62,6 +71,8 @@ bool send_cmd(unsigned char, unsigned char *);
 
 unsigned char get_status_byte();
 bool check_status_byte(unsigned char);
+
+unsigned char get_pkt_length(unsigned char *);
 
 } // namespace cc2500
 

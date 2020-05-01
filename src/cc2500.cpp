@@ -83,7 +83,7 @@ bool setup_cc2500()
     success &= send_cmd_value(CC2500_REG_MDMCFG0, 0xF8);
     success &= send_cmd_value(CC2500_REG_DEVIATN, 0x00);
     // device configuration
-    success &= send_cmd_value(CC2500_REG_MCSM1, 0x37);
+    success &= send_cmd_value(CC2500_REG_MCSM1, 0x3F);
     success &= send_cmd_value(CC2500_REG_MCSM0, 0x08);
     // frequency configuration
     success &= send_cmd_value(CC2500_REG_FOCCFG, 0x1D);
@@ -99,10 +99,8 @@ bool setup_cc2500()
     success &= send_cmd_value(CC2500_REG_FSCAL0, 0x11);
     // power configuration
     success &= send_cmd_value(CC2500_REG_PATABLE, 0xA9);
-    // go to IDLE mode
+    // go to IDLE mode (should be redundant)
     success &= send_strobe_cmd(CC2500_REG_SIDLE);
-    // manually calibrate the frequency synthesizer
-    success &= send_strobe_cmd(CC2500_REG_SCAL);
     // turn on the LNA PA
     setup_LNA_PA();
     return success;
@@ -247,10 +245,10 @@ bool empty_RXFIFO()
     {
         return false;
     }
-    unsigned char *data = (unsigned char *)malloc(CC2500_CMD_LENGTH + RX_bytes);
-    data[CC2500_CMD_OFFSET] = CC2500_REG_RXFIFO | CC2500_REG_READ | CC2500_REG_BURST;
+    unsigned char *data = (unsigned char *)malloc(CC2500_LENGTH_CMD + RX_bytes);
+    data[CC2500_OFFSET_CMD] = CC2500_REG_RXFIFO | CC2500_REG_READ | CC2500_REG_BURST;
     // SPI transfer
-    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_CMD_LENGTH + RX_bytes) == -1)
+    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_LENGTH_CMD + RX_bytes) == -1)
     {
         lc::js_log("LivingColors exception: SPI transfer failed");
         free(data);
@@ -263,10 +261,11 @@ bool empty_RXFIFO()
 
 unsigned char *receive()
 {
-    unsigned char *data = (unsigned char *)malloc(CC2500_CMD_LENGTH + LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH);
-    data[CC2500_CMD_OFFSET] = CC2500_REG_RXFIFO | CC2500_REG_READ | CC2500_REG_BURST;
+    // paket length
+    unsigned char *data = (unsigned char *)malloc(CC2500_LENGTH_CMD + CC2500_LENGTH_HEADER);
+    data[CC2500_OFFSET_CMD] = CC2500_REG_RXFIFO | CC2500_REG_READ | CC2500_REG_SINGLE;
     // SPI transfer
-    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_CMD_LENGTH + LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH) == -1)
+    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_LENGTH_CMD + CC2500_LENGTH_HEADER) == -1)
     {
         lc::js_log("LivingColors exception: SPI transfer failed");
         free(data);
@@ -277,8 +276,26 @@ unsigned char *receive()
         free(data);
         return NULL;
     }
-    unsigned char *pkt = (unsigned char *)malloc(LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH);
-    memcpy(pkt, data + CC2500_PKT_OFFSET, LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH);
+    unsigned char length_payload = data[CC2500_OFFSET_DATA];
+    free(data);
+    // paket
+    data = (unsigned char *)malloc(CC2500_LENGTH_CMD + length_payload + CC2500_LENGTH_TRAILER);
+    data[CC2500_OFFSET_CMD] = CC2500_REG_RXFIFO | CC2500_REG_READ | CC2500_REG_BURST;
+    // SPI transfer
+    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_LENGTH_CMD + length_payload + CC2500_LENGTH_TRAILER) == -1)
+    {
+        lc::js_log("LivingColors exception: SPI transfer failed");
+        free(data);
+        return NULL;
+    }
+    if (!check_status_byte(data[0]))
+    {
+        free(data);
+        return NULL;
+    }
+    unsigned char *pkt = (unsigned char *)malloc(CC2500_LENGTH_HEADER + length_payload + CC2500_LENGTH_TRAILER);
+    pkt[CC2500_OFFSET_HEADER] = length_payload;
+    memcpy(pkt + CC2500_OFFSET_PAYLOAD, data + CC2500_OFFSET_DATA, length_payload + CC2500_LENGTH_TRAILER);
     free(data);
     return pkt;
 }
@@ -291,11 +308,12 @@ bool transmit(unsigned char *pkt)
         lc::js_log("LivingColors exception: TX FIFO was not empty before transmission");
         return false;
     }
-    unsigned char *data = (unsigned char *)malloc(CC2500_CMD_LENGTH + LC_HEADER_LENGTH + LC_PACKET_LENGTH);
-    data[CC2500_CMD_OFFSET] = CC2500_REG_TXFIFO | CC2500_REG_WRITE | CC2500_REG_BURST;
-    memcpy(data + CC2500_PKT_OFFSET, pkt, LC_HEADER_LENGTH + LC_PACKET_LENGTH);
+    unsigned char length_payload = pkt[CC2500_OFFSET_HEADER];
+    unsigned char *data = (unsigned char *)malloc(CC2500_LENGTH_CMD + CC2500_LENGTH_HEADER + length_payload);
+    data[CC2500_OFFSET_CMD] = CC2500_REG_TXFIFO | CC2500_REG_WRITE | CC2500_REG_BURST;
+    memcpy(data + CC2500_OFFSET_DATA, pkt, CC2500_LENGTH_HEADER + length_payload);
     // SPI transfer
-    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_CMD_LENGTH + LC_HEADER_LENGTH + LC_PACKET_LENGTH) == -1)
+    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_LENGTH_CMD + CC2500_LENGTH_HEADER + length_payload) == -1)
     {
         lc::js_log("LivingColors exception: SPI transfer failed");
         free(data);
@@ -312,7 +330,7 @@ bool send_strobe_cmd(unsigned char cmd)
 {
     unsigned char *data = &cmd;
     // SPI transfer
-    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_CMD_LENGTH) == -1)
+    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_LENGTH_CMD) == -1)
     {
         lc::js_log("LivingColors exception: SPI transfer failed");
         return false;
@@ -327,17 +345,17 @@ bool send_cmd_value(unsigned char cmd, unsigned char val)
 
 bool send_cmd(unsigned char cmd, unsigned char *val)
 {
-    unsigned char *data = (unsigned char *)malloc(CC2500_CMD_LENGTH + CC2500_VAL_LENGTH);
-    data[CC2500_CMD_OFFSET] = cmd;
-    data[CC2500_VAL_OFFSET] = *val;
+    unsigned char *data = (unsigned char *)malloc(CC2500_LENGTH_CMD + CC2500_LENGTH_SINGLE_ACCESS);
+    data[CC2500_OFFSET_CMD] = cmd;
+    data[CC2500_OFFSET_DATA] = *val;
     // SPI transfer
-    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_CMD_LENGTH + CC2500_VAL_LENGTH) == -1)
+    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_LENGTH_CMD + CC2500_LENGTH_SINGLE_ACCESS) == -1)
     {
         lc::js_log("LivingColors exception: SPI transfer failed");
         free(data);
         return false;
     }
-    *val = data[CC2500_VAL_OFFSET];
+    *val = data[CC2500_OFFSET_DATA];
     bool status = check_status_byte(data[0]);
     free(data);
     return status;
@@ -348,7 +366,7 @@ unsigned char get_status_byte()
     unsigned char cmd = CC2500_REG_SNOP;
     unsigned char *data = &cmd;
     // SPI transfer
-    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_CMD_LENGTH) == -1)
+    if (wiringPiSPIDataRW(CC2500_SPI_CHANNEL, data, CC2500_LENGTH_CMD) == -1)
     {
         lc::js_log("LivingColors exception: SPI transfer failed");
         return CC2500_ERR;
@@ -380,6 +398,11 @@ bool check_status_byte(unsigned char status)
         return false;
     }
     return true;
+}
+
+unsigned char get_pkt_length(unsigned char *pkt)
+{
+    return CC2500_LENGTH_HEADER + pkt[CC2500_OFFSET_HEADER] + CC2500_LENGTH_TRAILER;
 }
 
 } // namespace cc2500

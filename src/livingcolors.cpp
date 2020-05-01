@@ -114,12 +114,13 @@ bool setup()
         }
         std::this_thread::sleep_for(cc2500_setup_retry_delay);
     }
-    // the mode is (or is transitioning to) IDLE
+    // the mode is IDLE
     {
         std::lock_guard<std::mutex> lck_cc2500(cc2500_mtx);
-        if (!await_mode(CC2500_MODE_IDLE))
+        // perform FSCAL
+        if (!calibrate())
         {
-            js_log("LivingColors exception: the cc2500 failed to go to IDLE after setup");
+            js_log("LivingColors exception: cc2500 calibration during setup failed");
             return false;
         }
         reset_flag = false;
@@ -180,7 +181,6 @@ void ISR_loop()
             continue;
         }
         // RX ISR
-        // the mode is (or is transitioning to) RX or FSTXON
         if (!try_mode(CC2500_MODE_FSTXON))
         {
             initiate_reset();
@@ -204,27 +204,72 @@ void ISR_loop()
             }
             continue;
         }
-        if (RX_bytes == LC_HEADER_LENGTH + LC_PACKET_LENGTH + LC_TRAILER_LENGTH)
+        bool RX_completed = false;
+        goto l_receive_pkt;
+    l_next_INT:
+    {
+        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+        if (INT_count > 0)
+        {
+            --INT_count;
+        }
+        else
+        {
+            js_log("LivingColors warning: INT missed");
+        }
+    }
+    l_receive_pkt:
+        if (RX_bytes >= CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD + CC2500_LENGTH_TRAILER)
         {
             // the RX FIFO contains a packet
             unsigned char *pkt = cc2500::receive();
             if (!pkt)
             {
-                lc::js_log("LivingColors exception: RX failed");
+                js_log("LivingColors exception: RX failed");
                 initiate_reset();
                 return;
             }
-            if (test_CRC(pkt))
+            unsigned char length = cc2500::get_pkt_length(pkt);
+            if (RX_bytes >= length)
             {
-                if (memcmp(pkt + LC_OFFSET_DST_ADDR, bridge, LC_ADDR_LENGHT) == 0)
+                RX_bytes -= length;
+            }
+            else
+            {
+                js_log("LivingColors exception: header contained invalid packet length field");
+                initiate_reset();
+                return;
+            }
+            if (RX_bytes == 0x00)
+            {
+                RX_completed = true;
                 {
-                    if (memcmp(pkt + LC_OFFSET_SRC_ADDR, remotes[0], LC_ADDR_LENGHT) == 0)
+                    std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+                    if (INT_count != 0)
+                    {
+                        INT_count = 0;
+                        js_log("LivingColors warning: unexpected INT received");
+                    }
+                }
+            }
+            if (test_lc(pkt) && test_CRC(pkt))
+            {
+                if (memcmp(pkt + LC_OFFSET_DST_ADDR, bridge, LC_LENGHT_ADDR) == 0)
+                {
+                    if (memcmp(pkt + LC_OFFSET_SRC_ADDR, remotes[0], LC_LENGHT_ADDR) == 0)
                     {
                         // we received a packet from the remote
+                        if (send_pkt_ACK)
+                        {
+                            free(pkt_ACK);
+                        }
                         pkt_ACK = create_packet_ACK(pkt);
                         send_pkt_ACK = true;
-                        await_RX = false;
-                        lck_cc2500.unlock();
+                        if (RX_completed)
+                        {
+                            await_RX = false;
+                            lck_cc2500.unlock();
+                        }
                         TX_pending_cv.notify_one();
                         await_RX_cv.notify_one();
                         await_ACK_cv.notify_one();
@@ -237,14 +282,18 @@ void ISR_loop()
                             }
                         }
                         RX_pending_cv.notify_one();
-                        continue;
+                        if (RX_completed)
+                        {
+                            continue;
+                        }
+                        goto l_next_INT;
                     }
                     else
                     {
                         bool valid = false;
                         for (int i = 0; i < num_lamps; i++)
                         {
-                            if (memcmp(pkt + LC_OFFSET_SRC_ADDR, lamps[i], LC_ADDR_LENGHT) == 0)
+                            if (memcmp(pkt + LC_OFFSET_SRC_ADDR, lamps[i], LC_LENGHT_ADDR) == 0)
                             {
                                 valid = true;
                                 break;
@@ -258,17 +307,31 @@ void ISR_loop()
                                 if (test_ACK(pkt))
                                 {
                                     await_ACK = false;
-                                    if (!cc2500::set_mode(CC2500_MODE_RX))
+                                    if (RX_completed)
                                     {
-                                        js_log("LivingColors exception: restarting RX failed");
-                                        initiate_reset();
-                                        return;
+                                        if (await_RX)
+                                        {
+                                            await_RX = false;
+                                        }
+                                        else
+                                        {
+                                            if (!cc2500::set_mode(CC2500_MODE_RX))
+                                            {
+                                                js_log("LivingColors exception: restarting RX failed");
+                                                initiate_reset();
+                                                return;
+                                            }
+                                        }
+                                        lck_cc2500.unlock();
                                     }
-                                    lck_cc2500.unlock();
                                     await_ACK_cv.notify_one();
                                     await_RX_cv.notify_one();
                                     free(pkt);
-                                    continue;
+                                    if (RX_completed)
+                                    {
+                                        continue;
+                                    }
+                                    goto l_next_INT;
                                 }
                                 js_log("LivingColors warning: received wrong ACK");
                             }
@@ -288,18 +351,38 @@ void ISR_loop()
                     js_log("LivingColors warning: received packet contained wrong destination address");
                 }
             }
+            else
+            {
+                js_log("LivingColors warning: received packet was not a valid LivingColors packet or CRC failed");
+            }
             free(pkt);
+            if (!RX_completed)
+            {
+                goto l_next_INT;
+            }
         }
         else
         {
-            // the RX FIFO contains an invalid number of bytes
-            js_log("LivingColors warning: RX FIFO contains invalid number of bytes");
+            // the RX FIFO contains an invalid number of bytes < 17
+            js_log("LivingColors warning: RX FIFO contains invalid number of bytes (RX BYTES < 17)");
             if (!cc2500::empty_RXFIFO())
             {
                 js_log("LivingColors exception: emptying RX FIFO failed");
                 initiate_reset();
                 return;
             }
+            {
+                std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+                if (INT_count != 0)
+                {
+                    INT_count = 0;
+                    js_log("LivingColors warning: multiple INTs received but RX BYTES was < 17");
+                }
+            }
+        }
+        if (send_pkt_ACK)
+        {
+            continue;
         }
         if (await_RX)
         {
@@ -544,18 +627,7 @@ void FSCAL_loop()
             }
         } while (RX_bytes != 0x00);
         // perform FSCAL
-        if (!try_mode(CC2500_MODE_IDLE))
-        {
-            initiate_reset();
-            return;
-        }
-        if (!cc2500::send_strobe_cmd(CC2500_REG_SCAL))
-        {
-            js_log("LivingColors exception: strobe command SCAL failed");
-            initiate_reset();
-            return;
-        }
-        if (!await_mode(CC2500_MODE_IDLE))
+        if (!calibrate())
         {
             initiate_reset();
             return;
@@ -568,6 +640,24 @@ void FSCAL_loop()
             return;
         }
     }
+}
+
+bool calibrate()
+{
+    if (!try_mode(CC2500_MODE_IDLE))
+    {
+        return false;
+    }
+    if (!cc2500::send_strobe_cmd(CC2500_REG_SCAL))
+    {
+        js_log("LivingColors exception: strobe command SCAL failed");
+        return false;
+    }
+    if (!await_mode(CC2500_MODE_IDLE))
+    {
+        return false;
+    }
+    return true;
 }
 
 bool await_mode(unsigned char mode)
@@ -719,10 +809,10 @@ StateChange create_StateChange(unsigned char *pkt, uint32_t lamp)
 
 unsigned char *create_packet(StateChange &sc)
 {
-    unsigned char *pkt = (unsigned char *)malloc(LC_HEADER_LENGTH + LC_PACKET_LENGTH);
-    pkt[LC_OFFSET_LENGTH] = LC_PACKET_LENGTH;
-    memcpy(pkt + LC_OFFSET_DST_ADDR, lamps[sc.lamp], LC_ADDR_LENGHT);
-    memcpy(pkt + LC_OFFSET_SRC_ADDR, bridge, LC_ADDR_LENGHT);
+    unsigned char *pkt = (unsigned char *)malloc(CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    pkt[LC_OFFSET_LENGTH] = LC_LENGTH_PAYLOAD;
+    memcpy(pkt + LC_OFFSET_DST_ADDR, lamps[sc.lamp], LC_LENGHT_ADDR);
+    memcpy(pkt + LC_OFFSET_SRC_ADDR, bridge, LC_LENGHT_ADDR);
     pkt[LC_OFFSET_PTCL_INFO] = LC_PTCL_INFO;
     pkt[LC_OFFSET_COMMAND] = sc.command;
     {
@@ -738,17 +828,17 @@ unsigned char *create_packet(StateChange &sc)
 
 unsigned char *create_packet_ACK(unsigned char *pkt)
 {
-    unsigned char *pkt_ACK = (unsigned char *)malloc(LC_HEADER_LENGTH + LC_PACKET_LENGTH);
-    memcpy(pkt_ACK, pkt, LC_HEADER_LENGTH + LC_PACKET_LENGTH);
-    memcpy(pkt_ACK + LC_OFFSET_DST_ADDR, pkt + LC_OFFSET_SRC_ADDR, LC_ADDR_LENGHT);
-    memcpy(pkt_ACK + LC_OFFSET_SRC_ADDR, bridge, LC_ADDR_LENGHT);
+    unsigned char *pkt_ACK = (unsigned char *)malloc(CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    memcpy(pkt_ACK, pkt, CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    memcpy(pkt_ACK + LC_OFFSET_DST_ADDR, pkt + LC_OFFSET_SRC_ADDR, LC_LENGHT_ADDR);
+    memcpy(pkt_ACK + LC_OFFSET_SRC_ADDR, bridge, LC_LENGHT_ADDR);
     pkt_ACK[LC_OFFSET_COMMAND]++;
     return pkt_ACK;
 }
 
 bool test_ACK(unsigned char *pkt_ACK)
 {
-    if (memcmp(pkt_ACK + LC_OFFSET_SRC_ADDR, pkt_TX + LC_OFFSET_DST_ADDR, LC_ADDR_LENGHT))
+    if (memcmp(pkt_ACK + LC_OFFSET_SRC_ADDR, pkt_TX + LC_OFFSET_DST_ADDR, LC_LENGHT_ADDR))
         return false;
     if (pkt_ACK[LC_OFFSET_SEQUENCE] != pkt_TX[LC_OFFSET_SEQUENCE])
         return false;
@@ -759,7 +849,12 @@ bool test_ACK(unsigned char *pkt_ACK)
 
 bool test_CRC(unsigned char *pkt)
 {
-    return pkt[LC_OFFSET_CRC] & LC_MSK_CRC;
+    return pkt[LC_OFFSET_CRC] & CC2500_MSK_CRC;
+}
+
+bool test_lc(unsigned char *pkt)
+{
+    return pkt[LC_OFFSET_LENGTH] == LC_LENGTH_PAYLOAD && pkt[LC_OFFSET_PTCL_INFO] == LC_PTCL_INFO;
 }
 
 void inc_sequence_nr(unsigned char *pkt)
