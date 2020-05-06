@@ -81,13 +81,14 @@ std::condition_variable FSCAL_cv;
 
 // timeouts
 auto cc2500_RX_timeout = 5ms;
-auto cc2500_RX_ACK_timeout = 10ms;
+auto cc2500_RX_ACK_timeout = 12ms;
 auto cc2500_TX_timeout = 5ms;
 auto cc2500_try_mode_timeout = 10ms;
 auto cc2500_await_mode_timeout = 10ms;
 
 // delays
 auto cc2500_setup_retry_delay = 100ms;
+auto cc2500_TX_CMD_delay = 6ms;
 auto cc2500_TX_ACK_delay = 3ms;
 auto cc2500_FSCAL_retry_delay = 1min;
 auto cc2500_FSCAL_last_INT_delay = 30s;
@@ -528,6 +529,14 @@ void TX_loop()
                 goto l_ACK_received;
             }
             inc_sequence_nr(TX_CMD_pkt_current);
+        }
+        {
+            duration dt = steady_clock::now() - last_INT;
+            duration t_remaining = std::chrono::milliseconds(cc2500_TX_CMD_delay) - dt;
+            if (t_remaining > duration::zero())
+            {
+                std::this_thread::sleep_for(t_remaining);
+            }
         }
         await_TX = true;
         if (!cc2500::transmit(TX_CMD_pkt_current))
