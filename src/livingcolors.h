@@ -20,6 +20,10 @@
 
 #define LC_PTCL_INFO 17
 
+#define LC_COMMAND_HSV 0x03
+#define LC_COMMAND_ON 0x05
+#define LC_COMMAND_OFF 0x07
+
 #include <cstdint>
 
 namespace lc

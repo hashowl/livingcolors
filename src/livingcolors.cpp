@@ -850,13 +850,16 @@ bool test_RX_ACK(unsigned char *RX_ACK_pkt)
         return false;
     if (RX_ACK_pkt[LC_OFFSET_SEQUENCE] != TX_CMD_pkt_current[LC_OFFSET_SEQUENCE])
         return false;
-    if (RX_ACK_pkt[LC_OFFSET_COMMAND] != TX_CMD_pkt_current[LC_OFFSET_COMMAND] + 1)
+    if (RX_ACK_pkt[LC_OFFSET_COMMAND] != TX_CMD_pkt_current[LC_OFFSET_COMMAND] &&
+        RX_ACK_pkt[LC_OFFSET_COMMAND] != TX_CMD_pkt_current[LC_OFFSET_COMMAND] + 1)
         return false;
     return true;
 }
 
 bool test_TX_CMD(unsigned char *TX_CMD_pkt)
 {
+    if (TX_CMD_pkt[LC_OFFSET_COMMAND] == LC_COMMAND_ON || TX_CMD_pkt[LC_OFFSET_COMMAND] == LC_COMMAND_OFF)
+        return true;
     int lamp = get_lamp(TX_CMD_pkt + LC_OFFSET_DST_ADDR);
     if (!RX_ACK_pkt_last[lamp])
         return true;
