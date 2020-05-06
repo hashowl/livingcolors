@@ -44,8 +44,9 @@ std::mutex cc2500_mtx;
 std::thread ISR_thread;
 std::condition_variable INT_pending_cv;
 std::mutex INT_mtx;
-int INT_count;
+std::queue<time_point> INT_queue;
 time_point last_INT;
+time_point last_RX_CMD_INT;
 
 // TX thread
 std::thread TX_thread;
@@ -87,6 +88,7 @@ auto cc2500_await_mode_timeout = 10ms;
 
 // delays
 auto cc2500_setup_retry_delay = 100ms;
+auto cc2500_TX_ACK_delay = 3ms;
 auto cc2500_FSCAL_retry_delay = 1min;
 auto cc2500_FSCAL_last_INT_delay = 30s;
 
@@ -156,7 +158,7 @@ void cc2500_ISR()
     {
         std::lock_guard<std::mutex> lck_INT(INT_mtx);
         last_INT = steady_clock::now();
-        ++INT_count;
+        INT_queue.push(last_INT);
     }
     INT_pending_cv.notify_one();
 }
@@ -165,12 +167,14 @@ void ISR_loop()
 {
     while (true)
     {
+        time_point INT_time;
         {
             std::unique_lock<std::mutex> lck_INT(INT_mtx);
-            INT_pending_cv.wait(lck_INT, [] { return (INT_count > 0) || reset_flag.load(); });
+            INT_pending_cv.wait(lck_INT, [] { return !INT_queue.empty() || reset_flag.load(); });
             if (reset_flag.load())
                 return;
-            --INT_count;
+            INT_time = INT_queue.front();
+            INT_queue.pop();
         }
         std::unique_lock<std::mutex> lck_cc2500(cc2500_mtx);
         if (await_TX)
@@ -221,9 +225,10 @@ void ISR_loop()
     l_next_INT:
     {
         std::lock_guard<std::mutex> lck_INT(INT_mtx);
-        if (INT_count > 0)
+        if (!INT_queue.empty())
         {
-            --INT_count;
+            INT_time = INT_queue.front();
+            INT_queue.pop();
         }
         else
         {
@@ -257,9 +262,9 @@ void ISR_loop()
                 RX_completed = true;
                 {
                     std::lock_guard<std::mutex> lck_INT(INT_mtx);
-                    if (INT_count != 0)
+                    if (!INT_queue.empty())
                     {
-                        INT_count = 0;
+                        INT_queue = std::queue<time_point>();
                         js_log("LivingColors warning: unexpected INT received");
                     }
                 }
@@ -294,6 +299,7 @@ void ISR_loop()
                                 }
                             }
                         }
+                        last_RX_CMD_INT = INT_time;
                         free(RX_CMD_pkt);
                         if (RX_completed)
                         {
@@ -381,9 +387,9 @@ void ISR_loop()
             }
             {
                 std::lock_guard<std::mutex> lck_INT(INT_mtx);
-                if (INT_count != 0)
+                if (!INT_queue.empty())
                 {
-                    INT_count = 0;
+                    INT_queue = std::queue<time_point>();
                     js_log("LivingColors warning: multiple INTs received but RX BYTES was < 17");
                 }
             }
@@ -448,6 +454,12 @@ void TX_loop()
                     initiate_reset();
                     return;
                 }
+            }
+            duration dt = steady_clock::now() - last_RX_CMD_INT;
+            duration t_remaining = std::chrono::milliseconds(cc2500_TX_ACK_delay) - dt;
+            if (t_remaining > duration::zero())
+            {
+                std::this_thread::sleep_for(t_remaining);
             }
             await_TX = true;
             if (!cc2500::transmit(TX_ACK_pkt_current))
@@ -718,7 +730,7 @@ void reset()
     stop();
     {
         std::lock_guard<std::mutex> lck_INT(INT_mtx);
-        INT_count = 0;
+        INT_queue = std::queue<time_point>();
     }
     {
         std::lock_guard<std::mutex> lck_cc2500(cc2500_mtx);
