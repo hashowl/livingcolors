@@ -9,78 +9,15 @@
 #include "cc2500_reg.h"
 
 extern Napi::ThreadSafeFunction tsf_log;
-extern Napi::ThreadSafeFunction tsf_change_state;
+extern Napi::ThreadSafeFunction tsf_ack;
 
 namespace lc
 {
 
 using namespace std::chrono_literals;
-
-// flags
-std::atomic<bool> reset_flag(true);
-
-// cc2500
-std::mutex cc2500_mtx;
-
-// ISR thread
-std::thread ISR_thread;
-std::condition_variable INT_pending_cv;
-int INT_count;
-std::mutex INT_count_mtx;
-
-// RX thread
-std::thread RX_thread;
-std::condition_variable RX_pending_cv;
-// RX queue
-std::queue<unsigned char *> RX_queue;
-std::mutex RX_queue_mtx;
-
-// TX thread
-std::thread TX_thread;
-std::condition_variable TX_pending_cv;
-// TX queue
-std::queue<unsigned char *> TX_queue;
-std::mutex TX_queue_mtx;
-// TX paket
-unsigned char *pkt_TX;
-bool send_pkt_TX;
-int send_pkt_TX_try;
-// ACK paket
-unsigned char *pkt_ACK;
-bool send_pkt_ACK;
-
-// await RX
-std::condition_variable await_RX_cv;
-bool await_RX;
-// await TX
-std::condition_variable await_TX_cv;
-bool await_TX;
-// await ACK
-std::condition_variable await_ACK_cv;
-bool await_ACK;
-
-// FSCAL thread
-std::thread FSCAL_thread;
-std::condition_variable FSCAL_cv;
-
-// timeouts
-auto cc2500_RX_timeout = 100ms;
-auto cc2500_TX_timeout = 100ms;
-auto cc2500_ACK_timeout = 250ms;
-auto cc2500_try_mode_timeout = 200ms;
-auto cc2500_await_mode_timeout = 200ms;
-
-// delays
-auto cc2500_setup_retry_delay = 100ms;
-auto cc2500_FSCAL_retry_delay = 1min;
-
-// intervals
-auto cc2500_FSCAL_interval = 15min;
-
-// retry counts
-int cc2500_setup_retries = 2;
-int cc2500_FSCAL_retries = 9;
-int cc2500_send_pkt_TX_retries = 3;
+using steady_clock = std::chrono::steady_clock;
+using time_point = std::chrono::time_point<steady_clock>;
+using duration = steady_clock::duration;
 
 // addresses
 const unsigned char bridge[] = {0xAA, 0xAA, 0xAA, 0x01};
@@ -96,6 +33,70 @@ const unsigned char *lamps[] = {
     lamp_0,
     lamp_1,
     lamp_2};
+
+// flags
+std::atomic<bool> reset_flag(true);
+
+// cc2500
+std::mutex cc2500_mtx;
+
+// ISR thread
+std::thread ISR_thread;
+std::condition_variable INT_pending_cv;
+std::mutex INT_mtx;
+int INT_count;
+time_point last_INT;
+
+// TX thread
+std::thread TX_thread;
+std::condition_variable TX_pending_cv;
+
+// packets
+std::mutex pkt_mtx;
+// RX ACK packets
+unsigned char *RX_ACK_pkt_last[num_lamps];
+// TX CMD packets
+std::queue<unsigned char *> TX_CMD_pkt_queue;
+unsigned char *TX_CMD_pkt_current;
+bool TX_CMD_pending;
+int TX_CMD_try;
+// TX ACK packet
+unsigned char *TX_ACK_pkt_current;
+bool TX_ACK_pending;
+
+// await RX
+std::condition_variable await_RX_cv;
+bool await_RX;
+// await RX ACK
+std::condition_variable await_RX_ACK_cv;
+bool await_RX_ACK;
+// await TX
+std::condition_variable await_TX_cv;
+bool await_TX;
+
+// FSCAL thread
+std::thread FSCAL_thread;
+std::condition_variable FSCAL_cv;
+
+// timeouts
+auto cc2500_RX_timeout = 5ms;
+auto cc2500_RX_ACK_timeout = 10ms;
+auto cc2500_TX_timeout = 5ms;
+auto cc2500_try_mode_timeout = 10ms;
+auto cc2500_await_mode_timeout = 10ms;
+
+// delays
+auto cc2500_setup_retry_delay = 100ms;
+auto cc2500_FSCAL_retry_delay = 1min;
+auto cc2500_FSCAL_last_INT_delay = 30s;
+
+// intervals
+auto cc2500_FSCAL_interval = 15min;
+
+// retry counts
+int cc2500_setup_retries = 2;
+int cc2500_FSCAL_retries = 9;
+int cc2500_TX_CMD_retries = 3;
 
 // sequence number
 std::mutex SEQUENCE_NR_mtx;
@@ -137,7 +138,6 @@ bool setup()
 void start_threads()
 {
     ISR_thread = std::thread(ISR_loop);
-    RX_thread = std::thread(RX_loop);
     TX_thread = std::thread(TX_loop);
     FSCAL_thread = std::thread(FSCAL_loop);
 }
@@ -154,7 +154,8 @@ void cc2500_ISR()
     if (reset_flag.load())
         return;
     {
-        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+        std::lock_guard<std::mutex> lck_INT(INT_mtx);
+        last_INT = steady_clock::now();
         ++INT_count;
     }
     INT_pending_cv.notify_one();
@@ -165,8 +166,8 @@ void ISR_loop()
     while (true)
     {
         {
-            std::unique_lock<std::mutex> lck_INT_count(INT_count_mtx);
-            INT_pending_cv.wait(lck_INT_count, [] { return (INT_count > 0) || reset_flag.load(); });
+            std::unique_lock<std::mutex> lck_INT(INT_mtx);
+            INT_pending_cv.wait(lck_INT, [] { return (INT_count > 0) || reset_flag.load(); });
             if (reset_flag.load())
                 return;
             --INT_count;
@@ -175,6 +176,11 @@ void ISR_loop()
         if (await_TX)
         {
             // TX ISR
+            if (TX_ACK_pending)
+            {
+                TX_ACK_pending = false;
+                free(TX_ACK_pkt_current);
+            }
             await_TX = false;
             lck_cc2500.unlock();
             await_TX_cv.notify_one();
@@ -205,10 +211,16 @@ void ISR_loop()
             continue;
         }
         bool RX_completed = false;
+        bool restart_RX = true;
+        if (await_RX)
+        {
+            await_RX = false;
+            restart_RX = false;
+        }
         goto l_receive_pkt;
     l_next_INT:
     {
-        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+        std::lock_guard<std::mutex> lck_INT(INT_mtx);
         if (INT_count > 0)
         {
             --INT_count;
@@ -222,14 +234,14 @@ void ISR_loop()
         if (RX_bytes >= CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD + CC2500_LENGTH_TRAILER)
         {
             // the RX FIFO contains a packet
-            unsigned char *pkt = cc2500::receive();
-            if (!pkt)
+            unsigned char *RX_pkt = cc2500::receive();
+            if (!RX_pkt)
             {
                 js_log("LivingColors exception: RX failed");
                 initiate_reset();
                 return;
             }
-            unsigned char length = cc2500::get_pkt_length(pkt);
+            unsigned char length = cc2500::get_pkt_length(RX_pkt);
             if (RX_bytes >= length)
             {
                 RX_bytes -= length;
@@ -244,7 +256,7 @@ void ISR_loop()
             {
                 RX_completed = true;
                 {
-                    std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+                    std::lock_guard<std::mutex> lck_INT(INT_mtx);
                     if (INT_count != 0)
                     {
                         INT_count = 0;
@@ -252,85 +264,80 @@ void ISR_loop()
                     }
                 }
             }
-            if (test_lc(pkt) && test_CRC(pkt))
+            if (test_lc(RX_pkt) && test_CRC(RX_pkt))
             {
-                if (memcmp(pkt + LC_OFFSET_DST_ADDR, bridge, LC_LENGHT_ADDR) == 0)
+                if (memcmp(RX_pkt + LC_OFFSET_DST_ADDR, bridge, LC_LENGHT_ADDR) == 0)
                 {
-                    if (memcmp(pkt + LC_OFFSET_SRC_ADDR, remotes[0], LC_LENGHT_ADDR) == 0)
+                    if (memcmp(RX_pkt + LC_OFFSET_SRC_ADDR, remotes[0], LC_LENGHT_ADDR) == 0)
                     {
                         // we received a packet from the remote
-                        if (send_pkt_ACK)
+                        unsigned char *RX_CMD_pkt = RX_pkt;
                         {
-                            free(pkt_ACK);
+                            std::lock_guard<std::mutex> lck_pkt(pkt_mtx);
+                            if (TX_CMD_pending)
+                            {
+                                goto l_discard_pkt;
+                            }
+                            if (TX_ACK_pending)
+                            {
+                                free(TX_ACK_pkt_current);
+                            }
+                            TX_ACK_pkt_current = create_TX_ACK_pkt(RX_CMD_pkt);
+                            TX_ACK_pending = true;
+                            for (int i = 0; i < num_lamps; i++)
+                            {
+                                unsigned char *TX_CMD_pkt = create_TX_CMD_pkt(RX_CMD_pkt, i);
+                                TX_CMD_pkt_queue.push(TX_CMD_pkt);
+                                if (TX_CMD_pkt_queue.size() > 10)
+                                {
+                                    js_log("LivingColors warning: TX CMD queue size > 10");
+                                }
+                            }
                         }
-                        pkt_ACK = create_packet_ACK(pkt);
-                        send_pkt_ACK = true;
+                        free(RX_CMD_pkt);
                         if (RX_completed)
                         {
-                            await_RX = false;
                             lck_cc2500.unlock();
                         }
                         TX_pending_cv.notify_one();
-                        await_RX_cv.notify_one();
-                        await_ACK_cv.notify_one();
-                        {
-                            std::lock_guard<std::mutex> lck_RX_queue(RX_queue_mtx);
-                            RX_queue.push(pkt);
-                            if (RX_queue.size() > 10)
-                            {
-                                js_log("LivingColors warning: RX queue size > 10");
-                            }
-                        }
-                        RX_pending_cv.notify_one();
                         if (RX_completed)
                         {
                             continue;
                         }
+                        restart_RX = false;
                         goto l_next_INT;
                     }
                     else
                     {
-                        bool valid = false;
-                        for (int i = 0; i < num_lamps; i++)
-                        {
-                            if (memcmp(pkt + LC_OFFSET_SRC_ADDR, lamps[i], LC_LENGHT_ADDR) == 0)
-                            {
-                                valid = true;
-                                break;
-                            }
-                        }
-                        if (valid)
+                        int lamp = get_lamp(RX_pkt + LC_OFFSET_SRC_ADDR);
+                        if (lamp > -1)
                         {
                             // we received a packet from a lamp
-                            if (await_ACK)
+                            unsigned char *RX_ACK_pkt = RX_pkt;
+                            if (await_RX_ACK)
                             {
-                                if (test_ACK(pkt))
+                                if (test_RX_ACK(RX_ACK_pkt))
                                 {
-                                    await_ACK = false;
+                                    {
+                                        std::lock_guard<std::mutex> lck_pkt(pkt_mtx);
+                                        if (RX_ACK_pkt_last[lamp])
+                                            free(RX_ACK_pkt_last[lamp]);
+                                        RX_ACK_pkt_last[lamp] = RX_ACK_pkt;
+                                    }
+                                    StateChange sc = create_StateChange(RX_ACK_pkt_last[lamp]);
+                                    js_ack(sc);
+                                    await_RX_ACK = false;
                                     if (RX_completed)
                                     {
-                                        if (await_RX)
-                                        {
-                                            await_RX = false;
-                                        }
-                                        else
-                                        {
-                                            if (!cc2500::set_mode(CC2500_MODE_RX))
-                                            {
-                                                js_log("LivingColors exception: restarting RX failed");
-                                                initiate_reset();
-                                                return;
-                                            }
-                                        }
                                         lck_cc2500.unlock();
                                     }
-                                    await_ACK_cv.notify_one();
+                                    await_RX_ACK_cv.notify_one();
                                     await_RX_cv.notify_one();
-                                    free(pkt);
                                     if (RX_completed)
                                     {
                                         continue;
                                     }
+                                    restart_RX = false;
                                     goto l_next_INT;
                                 }
                                 js_log("LivingColors warning: received wrong ACK");
@@ -355,7 +362,8 @@ void ISR_loop()
             {
                 js_log("LivingColors warning: received packet was not a valid LivingColors packet or CRC failed");
             }
-            free(pkt);
+        l_discard_pkt:
+            free(RX_pkt);
             if (!RX_completed)
             {
                 goto l_next_INT;
@@ -372,7 +380,7 @@ void ISR_loop()
                 return;
             }
             {
-                std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+                std::lock_guard<std::mutex> lck_INT(INT_mtx);
                 if (INT_count != 0)
                 {
                     INT_count = 0;
@@ -380,46 +388,18 @@ void ISR_loop()
                 }
             }
         }
-        if (send_pkt_ACK)
+        if (restart_RX)
         {
-            continue;
-        }
-        if (await_RX)
-        {
-            await_RX = false;
-            lck_cc2500.unlock();
-            await_RX_cv.notify_one();
-            continue;
-        }
-        if (!cc2500::set_mode(CC2500_MODE_RX))
-        {
-            js_log("LivingColors exception: restarting RX failed");
-            initiate_reset();
-            return;
-        }
-    }
-}
-
-void RX_loop()
-{
-    while (true)
-    {
-        unsigned char *pkt;
-        {
-            std::unique_lock<std::mutex> lck_RX_queue(RX_queue_mtx);
-            RX_pending_cv.wait(lck_RX_queue, [] { return !RX_queue.empty() || reset_flag.load(); });
-            if (reset_flag.load())
+            if (!cc2500::set_mode(CC2500_MODE_RX))
+            {
+                js_log("LivingColors exception: restarting RX failed");
+                initiate_reset();
                 return;
-            pkt = RX_queue.front();
-            RX_queue.pop();
+            }
+            continue;
         }
-        // a packet has been popped from the RX queue and needs to be passed to the js callback
-        for (int i = 0; i < num_lamps; i++)
-        {
-            StateChange sc = create_StateChange(pkt, i);
-            js_change_state(sc);
-        }
-        free(pkt);
+        lck_cc2500.unlock();
+        await_RX_cv.notify_one();
     }
 }
 
@@ -427,28 +407,41 @@ void TX_loop()
 {
     while (true)
     {
-        std::unique_lock<std::mutex> lck_cc2500(cc2500_mtx);
-        while (!send_pkt_ACK && !send_pkt_TX && !reset_flag.load())
+        std::unique_lock<std::mutex> lck_cc2500(cc2500_mtx, std::defer_lock);
+        std::unique_lock<std::mutex> lck_pkt(pkt_mtx, std::defer_lock);
+        if (!TX_CMD_pending)
         {
+            lck_pkt.lock();
+            while (true)
             {
-                std::lock_guard<std::mutex> lck_TX_queue(TX_queue_mtx);
-                if (!TX_queue.empty())
+                while (!TX_CMD_pkt_queue.empty())
                 {
-                    pkt_TX = TX_queue.front();
-                    TX_queue.pop();
-                    send_pkt_TX_try = 0;
-                    send_pkt_TX = true;
+                    TX_CMD_pkt_current = TX_CMD_pkt_queue.front();
+                    TX_CMD_pkt_queue.pop();
+                    if (!test_TX_CMD(TX_CMD_pkt_current))
+                    {
+                        free(TX_CMD_pkt_current);
+                        continue;
+                    }
+                    TX_CMD_try = 0;
+                    TX_CMD_pending = true;
                     break;
                 }
+            l_TX_pending_wait:
+                if (TX_CMD_pending || TX_ACK_pending || reset_flag.load())
+                {
+                    lck_pkt.unlock();
+                    break;
+                }
+                TX_pending_cv.wait(lck_pkt);
             }
-            TX_pending_cv.wait(lck_cc2500);
         }
         if (reset_flag.load())
             return;
-        if (send_pkt_ACK)
+        lck_cc2500.lock();
+        if (TX_ACK_pending)
         {
-        l_send_pkt_ACK:
-            if (send_pkt_TX)
+            if (TX_CMD_pending)
             {
                 if (!cc2500::set_TXOFF_mode(CC2500_MODE_FSTXON))
                 {
@@ -456,22 +449,20 @@ void TX_loop()
                     return;
                 }
             }
-            send_pkt_ACK = false;
             await_TX = true;
-            if (!cc2500::transmit(pkt_ACK))
+            if (!cc2500::transmit(TX_ACK_pkt_current))
             {
                 js_log("LivingColors exception: TX failed");
                 initiate_reset();
                 return;
             }
-            free(pkt_ACK);
             if (!await_TX_cv.wait_for(lck_cc2500, cc2500_TX_timeout, [] { return !await_TX; }))
             {
                 js_log("LivingColors exception: timeout expired while waiting for TX");
                 initiate_reset();
                 return;
             }
-            if (send_pkt_TX)
+            if (TX_CMD_pending)
             {
                 if (!await_mode(CC2500_MODE_FSTXON))
                 {
@@ -483,11 +474,11 @@ void TX_loop()
                     initiate_reset();
                     return;
                 }
-                goto l_send_pkt_TX;
+                goto l_send_TX_CMD_pkt;
             }
             continue;
         }
-        // send_pkt_TX is true
+        // TX_CMD_pending is true
         // the mode is (or is transitioning to) RX or FSTXON
         if (!try_mode(CC2500_MODE_FSTXON))
         {
@@ -511,66 +502,73 @@ void TX_loop()
                     initiate_reset();
                     return;
                 }
-                if (send_pkt_ACK)
-                {
-                    goto l_send_pkt_ACK;
-                }
             }
         }
-    l_send_pkt_TX:
-        if (send_pkt_TX_try == 0)
+    l_send_TX_CMD_pkt:
+        if (TX_CMD_try == 0)
         {
-            await_ACK = true;
+            await_RX_ACK = true;
         }
         else
         {
-            if (await_ACK)
+            if (!await_RX_ACK)
             {
-                inc_sequence_nr(pkt_TX);
+                goto l_ACK_received;
             }
-            else
-            {
-                send_pkt_TX = false;
-                free(pkt_TX);
-                send_pkt_TX_try = 0;
-                continue;
-            }
+            inc_sequence_nr(TX_CMD_pkt_current);
         }
         await_TX = true;
-        if (!cc2500::transmit(pkt_TX))
+        if (!cc2500::transmit(TX_CMD_pkt_current))
         {
             js_log("LivingColors exception: TX failed");
             initiate_reset();
             return;
         }
-        await_ACK_cv.wait_for(lck_cc2500, cc2500_ACK_timeout, [] { return !await_ACK || send_pkt_ACK; });
         if (!await_TX_cv.wait_for(lck_cc2500, cc2500_TX_timeout, [] { return !await_TX; }))
         {
             js_log("LivingColors exception: timeout expired while waiting for TX");
             initiate_reset();
             return;
         }
-        if (!await_ACK)
+        if (!await_RX_ACK_cv.wait_for(lck_cc2500, cc2500_RX_ACK_timeout, [] { return !await_RX_ACK; }))
         {
-            send_pkt_TX = false;
-            free(pkt_TX);
-            send_pkt_TX_try = 0;
-        }
-        else
-        {
-            if (++send_pkt_TX_try > cc2500_send_pkt_TX_retries)
+            if (++TX_CMD_try > cc2500_TX_CMD_retries)
             {
-                await_ACK = false;
-                send_pkt_TX = false;
-                free(pkt_TX);
-                send_pkt_TX_try = 0;
+                lck_pkt.lock();
+                await_RX_ACK = false;
+                TX_CMD_pending = false;
+                free(TX_CMD_pkt_current);
+                TX_CMD_try = 0;
                 js_log("LivingColors warning: no ACK received");
             }
+            continue;
         }
-        if (send_pkt_ACK)
+    l_ACK_received:
+        lck_pkt.lock();
+        TX_CMD_pending = false;
+        free(TX_CMD_pkt_current);
+        TX_CMD_try = 0;
+        while (!TX_CMD_pkt_queue.empty())
         {
-            goto l_send_pkt_ACK;
+            TX_CMD_pkt_current = TX_CMD_pkt_queue.front();
+            TX_CMD_pkt_queue.pop();
+            if (!test_TX_CMD(TX_CMD_pkt_current))
+            {
+                free(TX_CMD_pkt_current);
+                continue;
+            }
+            TX_CMD_pending = true;
+            lck_pkt.unlock();
+            goto l_send_TX_CMD_pkt;
         }
+        if (!cc2500::set_mode(CC2500_MODE_RX))
+        {
+            js_log("LivingColors exception: restarting RX failed");
+            initiate_reset();
+            return;
+        }
+        lck_cc2500.unlock();
+        goto l_TX_pending_wait;
     }
 }
 
@@ -579,21 +577,22 @@ void FSCAL_loop()
     while (true)
     {
         std::unique_lock<std::mutex> lck_cc2500(cc2500_mtx);
-        auto t0 = std::chrono::steady_clock::now();
-        auto t_remaining = std::chrono::nanoseconds(cc2500_FSCAL_interval);
+        time_point t0 = steady_clock::now();
+        duration t_remaining = cc2500_FSCAL_interval;
         do
         {
             FSCAL_cv.wait_for(lck_cc2500, t_remaining);
             if (reset_flag.load())
                 return;
-            auto dt = std::chrono::steady_clock::now() - t0;
+            duration dt = steady_clock::now() - t0;
             t_remaining = cc2500_FSCAL_interval - dt;
-        } while (t_remaining > std::chrono::nanoseconds::zero());
+        } while (t_remaining > duration::zero());
         int i = 0;
         unsigned char RX_bytes = 0x00;
         do
         {
-            while (await_RX || await_TX || await_ACK || send_pkt_TX || send_pkt_ACK || (RX_bytes != 0x00))
+            bool recent_action = (steady_clock::now() - last_INT) < cc2500_FSCAL_last_INT_delay;
+            while (await_RX || await_RX_ACK || recent_action || (RX_bytes != 0x00))
             {
                 if (++i > cc2500_FSCAL_retries)
                 {
@@ -601,16 +600,17 @@ void FSCAL_loop()
                     initiate_reset();
                     return;
                 }
-                auto t0 = std::chrono::steady_clock::now();
-                auto t_remaining = std::chrono::nanoseconds(cc2500_FSCAL_retry_delay);
+                time_point t0 = steady_clock::now();
+                duration t_remaining = cc2500_FSCAL_retry_delay;
                 do
                 {
                     FSCAL_cv.wait_for(lck_cc2500, t_remaining);
                     if (reset_flag.load())
                         return;
-                    auto dt = std::chrono::steady_clock::now() - t0;
+                    duration dt = steady_clock::now() - t0;
                     t_remaining = cc2500_FSCAL_retry_delay - dt;
-                } while (t_remaining > std::chrono::nanoseconds::zero());
+                } while (t_remaining > duration::zero());
+                recent_action = (steady_clock::now() - last_INT) < cc2500_FSCAL_last_INT_delay;
             }
             // the mode is (or is transitioning to) RX or FSTXON
             if (!try_mode(CC2500_MODE_FSTXON))
@@ -717,25 +717,21 @@ void reset()
 {
     stop();
     {
-        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+        std::lock_guard<std::mutex> lck_INT(INT_mtx);
         INT_count = 0;
     }
     {
         std::lock_guard<std::mutex> lck_cc2500(cc2500_mtx);
         await_RX = false;
+        await_RX_ACK = false;
         await_TX = false;
-        await_ACK = false;
-        send_pkt_TX = false;
-        send_pkt_ACK = false;
-        send_pkt_TX_try = 0;
     }
     {
-        std::lock_guard<std::mutex> lck_RX_queue(RX_queue_mtx);
-        RX_queue = std::queue<unsigned char *>();
-    }
-    {
-        std::lock_guard<std::mutex> lck_TX_queue(TX_queue_mtx);
-        TX_queue = std::queue<unsigned char *>();
+        std::lock_guard<std::mutex> lck_pkt(pkt_mtx);
+        TX_CMD_pending = false;
+        TX_CMD_try = 0;
+        TX_CMD_pkt_queue = std::queue<unsigned char *>();
+        TX_ACK_pending = false;
     }
     if (!setup())
     {
@@ -748,13 +744,12 @@ void reset()
 void notify_threads()
 {
     {
-        std::lock_guard<std::mutex> lck_INT_count(INT_count_mtx);
+        std::lock_guard<std::mutex> lck_INT(INT_mtx);
         std::lock_guard<std::mutex> lck_cc2500(cc2500_mtx);
-        std::lock_guard<std::mutex> lck_RX_queue(RX_queue_mtx);
+        std::lock_guard<std::mutex> lck_pkt(pkt_mtx);
         reset_flag = true;
     }
     INT_pending_cv.notify_one();
-    RX_pending_cv.notify_one();
     TX_pending_cv.notify_one();
     FSCAL_cv.notify_one();
 }
@@ -763,8 +758,6 @@ void join_threads()
 {
     if (ISR_thread.joinable())
         ISR_thread.join();
-    if (RX_thread.joinable())
-        RX_thread.join();
     if (TX_thread.joinable())
         TX_thread.join();
     if (FSCAL_thread.joinable())
@@ -778,12 +771,12 @@ bool enqueue_StateChange(StateChange &sc)
         js_log("LivingColors exception: reset flag is set");
         return false;
     }
-    unsigned char *pkt = create_packet(sc);
+    unsigned char *pkt = create_TX_CMD_pkt(sc);
     {
-        std::lock_guard<std::mutex> lck_TX_queue(TX_queue_mtx);
-        if (TX_queue.size() < 10)
+        std::lock_guard<std::mutex> lck_pkt(pkt_mtx);
+        if (TX_CMD_pkt_queue.size() < 10)
         {
-            TX_queue.push(pkt);
+            TX_CMD_pkt_queue.push(pkt);
         }
         else
         {
@@ -796,72 +789,117 @@ bool enqueue_StateChange(StateChange &sc)
     return true;
 }
 
-StateChange create_StateChange(unsigned char *pkt, uint32_t lamp)
+StateChange create_StateChange(unsigned char *RX_ACK_pkt)
 {
     StateChange sc;
+    int lamp = get_lamp(RX_ACK_pkt + LC_OFFSET_SRC_ADDR);
     sc.lamp = lamp;
-    sc.command = pkt[LC_OFFSET_COMMAND];
-    sc.hue = pkt[LC_OFFSET_HUE];
-    sc.saturation = pkt[LC_OFFSET_SATURATION];
-    sc.value = pkt[LC_OFFSET_VALUE];
+    sc.command = RX_ACK_pkt[LC_OFFSET_COMMAND];
+    sc.hue = RX_ACK_pkt[LC_OFFSET_HUE];
+    sc.saturation = RX_ACK_pkt[LC_OFFSET_SATURATION];
+    sc.value = RX_ACK_pkt[LC_OFFSET_VALUE];
     return sc;
 }
 
-unsigned char *create_packet(StateChange &sc)
+unsigned char *create_TX_CMD_pkt(StateChange &sc)
 {
-    unsigned char *pkt = (unsigned char *)malloc(CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
-    pkt[LC_OFFSET_LENGTH] = LC_LENGTH_PAYLOAD;
-    memcpy(pkt + LC_OFFSET_DST_ADDR, lamps[sc.lamp], LC_LENGHT_ADDR);
-    memcpy(pkt + LC_OFFSET_SRC_ADDR, bridge, LC_LENGHT_ADDR);
-    pkt[LC_OFFSET_PTCL_INFO] = LC_PTCL_INFO;
-    pkt[LC_OFFSET_COMMAND] = sc.command;
+    unsigned char *TX_CMD_pkt = (unsigned char *)malloc(CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    TX_CMD_pkt[LC_OFFSET_LENGTH] = LC_LENGTH_PAYLOAD;
+    memcpy(TX_CMD_pkt + LC_OFFSET_DST_ADDR, lamps[sc.lamp], LC_LENGHT_ADDR);
+    memcpy(TX_CMD_pkt + LC_OFFSET_SRC_ADDR, bridge, LC_LENGHT_ADDR);
+    TX_CMD_pkt[LC_OFFSET_PTCL_INFO] = LC_PTCL_INFO;
+    TX_CMD_pkt[LC_OFFSET_COMMAND] = sc.command;
     {
         std::lock_guard<std::mutex> lck_SEQUENCE_NR(SEQUENCE_NR_mtx);
-        pkt[LC_OFFSET_SEQUENCE] = SEQUENCE_NR;
+        TX_CMD_pkt[LC_OFFSET_SEQUENCE] = SEQUENCE_NR;
         SEQUENCE_NR = (SEQUENCE_NR + 1) % 0x100;
     }
-    pkt[LC_OFFSET_HUE] = sc.hue;
-    pkt[LC_OFFSET_SATURATION] = sc.saturation;
-    pkt[LC_OFFSET_VALUE] = sc.value;
-    return pkt;
+    TX_CMD_pkt[LC_OFFSET_HUE] = sc.hue;
+    TX_CMD_pkt[LC_OFFSET_SATURATION] = sc.saturation;
+    TX_CMD_pkt[LC_OFFSET_VALUE] = sc.value;
+    return TX_CMD_pkt;
 }
 
-unsigned char *create_packet_ACK(unsigned char *pkt)
+unsigned char *create_TX_CMD_pkt(unsigned char *RX_CMD_pkt, uint32_t lamp)
 {
-    unsigned char *pkt_ACK = (unsigned char *)malloc(CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
-    memcpy(pkt_ACK, pkt, CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
-    memcpy(pkt_ACK + LC_OFFSET_DST_ADDR, pkt + LC_OFFSET_SRC_ADDR, LC_LENGHT_ADDR);
-    memcpy(pkt_ACK + LC_OFFSET_SRC_ADDR, bridge, LC_LENGHT_ADDR);
-    pkt_ACK[LC_OFFSET_COMMAND]++;
-    return pkt_ACK;
+    unsigned char *TX_CMD_pkt = (unsigned char *)malloc(CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    memcpy(TX_CMD_pkt, RX_CMD_pkt, CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    memcpy(TX_CMD_pkt + LC_OFFSET_DST_ADDR, lamps[lamp], LC_LENGHT_ADDR);
+    memcpy(TX_CMD_pkt + LC_OFFSET_SRC_ADDR, bridge, LC_LENGHT_ADDR);
+    {
+        std::lock_guard<std::mutex> lck_SEQUENCE_NR(SEQUENCE_NR_mtx);
+        TX_CMD_pkt[LC_OFFSET_SEQUENCE] = SEQUENCE_NR;
+        SEQUENCE_NR = (SEQUENCE_NR + 1) % 0x100;
+    }
+    return TX_CMD_pkt;
 }
 
-bool test_ACK(unsigned char *pkt_ACK)
+unsigned char *create_TX_ACK_pkt(unsigned char *RX_CMD_pkt)
 {
-    if (memcmp(pkt_ACK + LC_OFFSET_SRC_ADDR, pkt_TX + LC_OFFSET_DST_ADDR, LC_LENGHT_ADDR))
+    unsigned char *TX_ACK_pkt = (unsigned char *)malloc(CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    memcpy(TX_ACK_pkt, RX_CMD_pkt, CC2500_LENGTH_HEADER + LC_LENGTH_PAYLOAD);
+    memcpy(TX_ACK_pkt + LC_OFFSET_DST_ADDR, RX_CMD_pkt + LC_OFFSET_SRC_ADDR, LC_LENGHT_ADDR);
+    memcpy(TX_ACK_pkt + LC_OFFSET_SRC_ADDR, bridge, LC_LENGHT_ADDR);
+    TX_ACK_pkt[LC_OFFSET_COMMAND]++;
+    return TX_ACK_pkt;
+}
+
+bool test_RX_ACK(unsigned char *RX_ACK_pkt)
+{
+    if (memcmp(RX_ACK_pkt + LC_OFFSET_SRC_ADDR, TX_CMD_pkt_current + LC_OFFSET_DST_ADDR, LC_LENGHT_ADDR))
         return false;
-    if (pkt_ACK[LC_OFFSET_SEQUENCE] != pkt_TX[LC_OFFSET_SEQUENCE])
+    if (RX_ACK_pkt[LC_OFFSET_SEQUENCE] != TX_CMD_pkt_current[LC_OFFSET_SEQUENCE])
         return false;
-    if (pkt_ACK[LC_OFFSET_COMMAND] != pkt_TX[LC_OFFSET_COMMAND] + 1)
+    if (RX_ACK_pkt[LC_OFFSET_COMMAND] != TX_CMD_pkt_current[LC_OFFSET_COMMAND] + 1)
         return false;
     return true;
 }
 
-bool test_CRC(unsigned char *pkt)
+bool test_TX_CMD(unsigned char *TX_CMD_pkt)
 {
-    return pkt[LC_OFFSET_CRC] & CC2500_MSK_CRC;
+    int lamp = get_lamp(TX_CMD_pkt + LC_OFFSET_DST_ADDR);
+    if (!RX_ACK_pkt_last[lamp])
+        return true;
+    if (RX_ACK_pkt_last[lamp][LC_OFFSET_COMMAND] != TX_CMD_pkt[LC_OFFSET_COMMAND] + 1)
+        return true;
+    if (RX_ACK_pkt_last[lamp][LC_OFFSET_HUE] != TX_CMD_pkt[LC_OFFSET_HUE])
+        return true;
+    if (RX_ACK_pkt_last[lamp][LC_OFFSET_SATURATION] != TX_CMD_pkt[LC_OFFSET_SATURATION])
+        return true;
+    if (RX_ACK_pkt_last[lamp][LC_OFFSET_VALUE] != TX_CMD_pkt[LC_OFFSET_VALUE])
+        return true;
+    return false;
 }
 
-bool test_lc(unsigned char *pkt)
+bool test_CRC(unsigned char *RX_pkt)
 {
-    return pkt[LC_OFFSET_LENGTH] == LC_LENGTH_PAYLOAD && pkt[LC_OFFSET_PTCL_INFO] == LC_PTCL_INFO;
+    return RX_pkt[LC_OFFSET_CRC] & CC2500_MSK_CRC;
 }
 
-void inc_sequence_nr(unsigned char *pkt)
+bool test_lc(unsigned char *RX_pkt)
+{
+    return RX_pkt[LC_OFFSET_LENGTH] == LC_LENGTH_PAYLOAD && RX_pkt[LC_OFFSET_PTCL_INFO] == LC_PTCL_INFO;
+}
+
+void inc_sequence_nr(unsigned char *TX_CMD_pkt)
 {
     std::lock_guard<std::mutex> lck_SEQUENCE_NR(SEQUENCE_NR_mtx);
-    pkt[LC_OFFSET_SEQUENCE] = SEQUENCE_NR;
+    TX_CMD_pkt[LC_OFFSET_SEQUENCE] = SEQUENCE_NR;
     SEQUENCE_NR = (SEQUENCE_NR + 1) % 0x100;
+}
+
+int get_lamp(unsigned char *lamp_addr)
+{
+    int lamp = -1;
+    for (int i = 0; i < num_lamps; i++)
+    {
+        if (memcmp(lamp_addr, lamps[i], LC_LENGHT_ADDR) == 0)
+        {
+            lamp = i;
+            break;
+        }
+    }
+    return lamp;
 }
 
 void js_log(const char *msg)
@@ -869,9 +907,9 @@ void js_log(const char *msg)
     tsf_log.BlockingCall(new std::string(msg), js_cb_log);
 }
 
-void js_change_state(StateChange &sc)
+void js_ack(StateChange &sc)
 {
-    tsf_change_state.BlockingCall(new StateChange(sc), js_cb_change_state);
+    tsf_ack.BlockingCall(new StateChange(sc), js_cb_ack);
 }
 
 } // namespace lc

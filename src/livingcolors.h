@@ -43,7 +43,6 @@ void stop();
 void cc2500_ISR();
 
 void ISR_loop();
-void RX_loop();
 void TX_loop();
 void FSCAL_loop();
 
@@ -59,16 +58,20 @@ void join_threads();
 
 bool enqueue_StateChange(StateChange &);
 
-StateChange create_StateChange(unsigned char *, uint32_t);
-unsigned char *create_packet(StateChange &);
-unsigned char *create_packet_ACK(unsigned char *);
-bool test_ACK(unsigned char *);
+StateChange create_StateChange(unsigned char *);
+unsigned char *create_TX_CMD_pkt(StateChange &);
+unsigned char *create_TX_CMD_pkt(unsigned char *, uint32_t);
+unsigned char *create_TX_ACK_pkt(unsigned char *);
+bool test_RX_ACK(unsigned char *);
+bool test_TX_CMD(unsigned char *);
 bool test_CRC(unsigned char *);
 bool test_lc(unsigned char *);
 void inc_sequence_nr(unsigned char *);
 
+int get_lamp(unsigned char *);
+
 void js_log(const char *);
-void js_change_state(StateChange &);
+void js_ack(StateChange &);
 
 } // namespace lc
 

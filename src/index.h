@@ -15,7 +15,7 @@
 #include <string>
 #include "livingcolors.h"
 
-Napi::Boolean change_state(const Napi::CallbackInfo &);
+Napi::Boolean cmd(const Napi::CallbackInfo &);
 Napi::Boolean setup(const Napi::CallbackInfo &);
 Napi::Boolean stop(const Napi::CallbackInfo &);
 
@@ -26,7 +26,7 @@ unsigned char NapiValue_uint8(Napi::Value);
 uint32_t NapiValue_uint32(Napi::Value);
 
 void js_cb_log(Napi::Env, Napi::Function, std::string *);
-void js_cb_change_state(Napi::Env, Napi::Function, lc::StateChange *);
+void js_cb_ack(Napi::Env, Napi::Function, lc::StateChange *);
 
 Napi::Object Init(Napi::Env, Napi::Object);
 

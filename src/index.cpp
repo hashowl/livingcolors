@@ -1,9 +1,9 @@
 #include "index.h"
 
 Napi::ThreadSafeFunction tsf_log;
-Napi::ThreadSafeFunction tsf_change_state;
+Napi::ThreadSafeFunction tsf_ack;
 
-Napi::Boolean change_state(const Napi::CallbackInfo &info)
+Napi::Boolean cmd(const Napi::CallbackInfo &info)
 {
     Napi::Env env = info.Env();
     Napi::Object js_sc = info[0].As<Napi::Object>();
@@ -35,10 +35,10 @@ Napi::Boolean setup(const Napi::CallbackInfo &info)
         "JavaScript log callback",
         0,
         1);
-    tsf_change_state = Napi::ThreadSafeFunction::New(
+    tsf_ack = Napi::ThreadSafeFunction::New(
         env,
         info[1].As<Napi::Function>(),
-        "JavaScript changeState callback",
+        "JavaScript ack callback",
         0,
         1);
     if (!lc::setup())
@@ -59,7 +59,7 @@ Napi::Boolean stop(const Napi::CallbackInfo &info)
     lc::js_log("LivingColors info: stopping...");
     lc::stop();
     tsf_log.Release();
-    tsf_change_state.Release();
+    tsf_ack.Release();
     return Napi::Boolean::New(env, true);
 }
 
@@ -101,15 +101,15 @@ void js_cb_log(Napi::Env env, Napi::Function js_log, std::string *msg)
     delete msg;
 }
 
-void js_cb_change_state(Napi::Env env, Napi::Function js_change_state, lc::StateChange *sc)
+void js_cb_ack(Napi::Env env, Napi::Function js_ack, lc::StateChange *sc)
 {
-    js_change_state.Call({create_js_StateChange(env, *sc)});
+    js_ack.Call({create_js_StateChange(env, *sc)});
     delete sc;
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
-    exports.Set(Napi::String::New(env, "changeState"), Napi::Function::New(env, change_state));
+    exports.Set(Napi::String::New(env, "cmd"), Napi::Function::New(env, cmd));
     exports.Set(Napi::String::New(env, "setup"), Napi::Function::New(env, setup));
     exports.Set(Napi::String::New(env, "stop"), Napi::Function::New(env, stop));
     return exports;
