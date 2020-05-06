@@ -87,8 +87,8 @@ auto cc2500_try_mode_timeout = 10ms;
 auto cc2500_await_mode_timeout = 10ms;
 
 // delays
-auto cc2500_setup_retry_delay = 100ms;
-auto cc2500_TX_CMD_delay = 6ms;
+auto cc2500_setup_retry_delay = 50ms;
+auto cc2500_TX_CMD_delay = 3ms;
 auto cc2500_TX_ACK_delay = 3ms;
 auto cc2500_FSCAL_retry_delay = 1min;
 auto cc2500_FSCAL_last_INT_delay = 30s;
@@ -367,7 +367,7 @@ void ISR_loop()
             }
             else
             {
-                js_log("LivingColors warning: received packet was not a valid LivingColors packet or CRC failed");
+                // js_log("LivingColors warning: received packet was not a valid LivingColors packet or CRC failed");
             }
         l_discard_pkt:
             free(RX_pkt);
