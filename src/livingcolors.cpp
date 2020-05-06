@@ -367,7 +367,10 @@ void ISR_loop()
             }
             else
             {
-                // js_log("LivingColors warning: received packet was not a valid LivingColors packet or CRC failed");
+                if (LC_DEBUG)
+                {
+                    js_log("LivingColors warning: received packet was not a valid LivingColors packet or CRC failed");
+                }
             }
         l_discard_pkt:
             free(RX_pkt);
@@ -379,7 +382,10 @@ void ISR_loop()
         else
         {
             // the RX FIFO contains an invalid number of bytes < 17
-            js_log("LivingColors warning: RX FIFO contains invalid number of bytes (RX BYTES < 17)");
+            if (LC_DEBUG)
+            {
+                js_log("LivingColors warning: RX FIFO contains invalid number of bytes (RX BYTES < 17)");
+            }
             if (!cc2500::empty_RXFIFO())
             {
                 js_log("LivingColors exception: emptying RX FIFO failed");

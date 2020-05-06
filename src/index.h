@@ -5,6 +5,8 @@
 #define NAPI_VERSION 5
 #endif
 
+#define LC_DEBUG 0
+
 #define LC_SC_LAMP "lamp"
 #define LC_SC_COMMAND "command"
 #define LC_SC_HUE "hue"
