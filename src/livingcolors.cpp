@@ -471,9 +471,13 @@ void TX_loop()
             }
             if (!await_TX_cv.wait_for(lck_cc2500, cc2500_TX_timeout, [] { return !await_TX; }))
             {
-                js_log("LivingColors exception: timeout expired while waiting for TX");
-                initiate_reset();
-                return;
+                unsigned char mode = TX_CMD_pending ? CC2500_MODE_FSTXON : CC2500_MODE_RX;
+                if (!await_mode(mode))
+                {
+                    js_log("LivingColors exception: timeout expired while waiting for TX");
+                    initiate_reset();
+                    return;
+                }
             }
             if (TX_CMD_pending)
             {
@@ -547,9 +551,12 @@ void TX_loop()
         }
         if (!await_TX_cv.wait_for(lck_cc2500, cc2500_TX_timeout, [] { return !await_TX; }))
         {
-            js_log("LivingColors exception: timeout expired while waiting for TX");
-            initiate_reset();
-            return;
+            if (!await_mode(CC2500_MODE_RX))
+            {
+                js_log("LivingColors exception: timeout expired while waiting for TX");
+                initiate_reset();
+                return;
+            }
         }
         if (!await_RX_ACK_cv.wait_for(lck_cc2500, cc2500_RX_ACK_timeout, [] { return !await_RX_ACK; }))
         {
